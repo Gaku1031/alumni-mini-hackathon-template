@@ -1,0 +1,40 @@
+{
+  "name": "alumni-mini-hackathon-template",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "biome lint .",
+    "format": "biome format --write .",
+    "check": "biome check .",
+    "check:fix": "biome check --write .",
+    "db:start": "supabase start",
+    "db:stop": "supabase stop",
+    "db:status": "supabase status",
+    "db:reset": "supabase db reset",
+    "db:new": "supabase migration new",
+    "db:diff": "supabase db diff -f",
+    "db:types": "supabase gen types typescript --local > types/database.types.ts",
+    "db:link": "supabase link",
+    "db:push": "supabase db push"
+  },
+  "dependencies": {
+    "@supabase/ssr": "^0.12.5",
+    "@supabase/supabase-js": "^2.112.4",
+    "next": "16.3.4",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.11",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "supabase": "^2.116.0",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
