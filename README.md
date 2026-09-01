@@ -185,8 +185,13 @@ npm run db:push
 
 | 変数名 | 取得場所 |
 |---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase の Project Settings → API |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | 同上（publishable / anon key） |
+| `NEXT_PUBLIC_SUPABASE_URL` | Supabase の Project Settings → Data API → API URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase の Project Settings → API Keys → Publishable Key |
+
+> **`NEXT_PUBLIC_SUPABASE_URL` は `https://<ref>.supabase.co` の形だけを貼ること。**
+> 末尾の `/` や `/rest/v1/` を付けたまま貼ると、実行時に
+> `Invalid path specified in request URL（code: PGRST125）` になります。
+> （末尾スラッシュや `/rest/v1` はコード側でも除去していますが、貼る時点で外しておくのが確実です）
 
 `.env.example` に空のテンプレートがあります。
 
@@ -205,6 +210,7 @@ npm run db:push
 | 症状 | 対処 |
 |---|---|
 | 「接続できませんでした」と赤く出る | `npm run db:start` を実行したか、`.env.local` があるか確認 |
+| `Invalid path specified in request URL（code: PGRST125）` | `NEXT_PUBLIC_SUPABASE_URL` に `/rest/v1/` や末尾 `/` が付いている。`https://<ref>.supabase.co` だけにして再デプロイ |
 | クエリは成功するのにデータが0件 | RLS ポリシーが無い。上の「RLS」を参照 |
 | `supabase start` が失敗する | Docker が起動しているか確認。ポート 54321〜54324 が空いているか確認 |
 | 型が古いまま | `npm run db:types` を実行し忘れ |
