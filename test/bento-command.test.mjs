@@ -116,11 +116,11 @@ test("AC-3: 投稿した集計メッセージの message_id が保存される",
 
     // 空の集計メッセージ。まだ誰も頼んでいないので [頼む ▼] は出さない
     const posted = JSON.parse(post.body);
-    assert.match(posted.content, /9\/15\(月\) お弁当/);
-    assert.match(posted.content, /まだ注文がありません/);
+    assert.match(posted.embeds[0].title, /9\/15\(月\) お弁当/);
+    assert.match(posted.embeds[0].description, /まだ注文はありません/);
     const customIds = posted.components.flatMap((row) => row.components.map((c) => c.custom_id));
     assert.ok(customIds.includes("new_item"));
-    assert.ok(!customIds.includes("select_order"));
+    assert.ok(!customIds.includes("order_select"));
 
     const { results } = await allEvents(db);
     assert.equal(results[0].message_id, "111222333");
