@@ -7,7 +7,15 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!package-lock.json", "!specs/**"]
+    "includes": [
+      "**",
+      "!**/node_modules/**",
+      "!.wrangler/**",
+      "!worker-configuration.d.ts",
+      "!package-lock.json",
+      "!specs/**",
+      "!docs/**"
+    ]
   },
   "formatter": {
     "enabled": true,

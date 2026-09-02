@@ -47,5 +47,7 @@ test("devDependencies は Biome・TypeScript・wrangler の3つだけ", () => {
 test("check / check:fix / typecheck が定義されている", () => {
   assert.equal(pkg.scripts.check, "biome check .");
   assert.equal(pkg.scripts["check:fix"], "biome check --write .");
-  assert.equal(pkg.scripts.typecheck, "tsc --noEmit");
+  // 型定義は wrangler の生成物で gitignore してある。postinstall だけに任せると
+  // それが走らなかった環境で「Response が無い」に落ちるので、typecheck 自身に作らせる
+  assert.equal(pkg.scripts.typecheck, "wrangler types && tsc --noEmit");
 });
