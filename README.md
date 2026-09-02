@@ -28,14 +28,18 @@ Discord のチャンネルに貼った**1枚のメッセージ**が、注文が�
 - Cloudflare アカウント（無料）
 - Discord のサーバー（Bot を入れる先）
 
+**順序に意味がある。** デプロイして URL を確定させないと Discord の Endpoint が登録できず、
+Endpoint が登録できないと Bot は一度も動かない。マイグレーションはその後で構わない。
+
 ### 1. インストールと D1 の作成
 
 ```bash
 npm install
 npx wrangler login
 npm run db:create              # 出力された database_id を wrangler.jsonc に貼る
-npm run db:apply               # ローカルの D1 にテーブルを作る
 ```
+
+`database_id` を貼らないと次の deploy が失敗する。
 
 ### 2. Worker をデプロイして URL を確定させる
 
@@ -45,48 +49,66 @@ npm run db:apply               # ローカルの D1 にテーブルを作る
 npm run deploy                 # https://bento.<自分の名前>.workers.dev が出る
 ```
 
-### 3. Discord Application を作る
+### 3. Discord Application を作り、Endpoint URL を登録する
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) で New Application
 2. **General Information** の `PUBLIC KEY` を控える
 3. **Bot** タブでトークンを発行して控える
-4. secret を登録する
+4. secret を登録して反映する
 
 ```bash
 npx wrangler secret put DISCORD_PUBLIC_KEY
 npx wrangler secret put DISCORD_BOT_TOKEN
 npm run deploy                 # secret を反映
-npm run db:apply:remote        # 本番の D1 にテーブルを作る（ローカルとは別物）
 ```
+
+secret は Cloudflare が預かる。**`wrangler.jsonc` の `vars` には書かない**
+（`vars` は平文の設定でリポジトリに入る）。手元の値は `.dev.vars`（gitignore 済み）。
 
 5. **General Information** の `INTERACTIONS ENDPOINT URL` に手順2の URL を入れて保存
 
 保存を押すと Discord が疎通確認を投げてくる。**署名検証が通らないと保存できない**。
 ここが最初の関門で、`src/index.ts` には通る実装が入っている。
 
-### 4. スラッシュコマンドを登録する
-
-コマンドは Discord 側に登録しないとメッセージ欄に出てこない。
+### 4. マイグレーションを適用する
 
 ```bash
-cp .dev.vars.example .dev.vars   # APPLICATION ID と Bot トークンを書く
-npm run register                 # /bento と /bento-setup を登録
+npm run db:apply               # ローカルの D1 にテーブルを作る
+npm run db:apply:remote        # 本番の D1 にテーブルを作る
 ```
 
-グローバル登録は反映に最大1時間かかる。開発中は `.dev.vars` の `DISCORD_GUILD_ID` に
-テスト用サーバーの ID を入れると、そのサーバーにだけ即時反映される
+**ローカルと本番は別の DB。** 片方だけ打つと、もう片方は空のまま `no such table` になる。
+必ず両方打つ。
+
+### 5. スラッシュコマンドを登録する
+
+コマンドは Discord 側に登録しないとメッセージ欄に出てこない。
+APPLICATION ID は **General Information** にある。
+
+```bash
+cp .dev.vars.example .dev.vars                        # Bot トークンを書く
+DISCORD_APPLICATION_ID=<APPLICATION ID> npm run register   # /bento と /bento-setup を登録
+```
+
+グローバル登録は反映に最大1時間かかる。開発中は `DISCORD_GUILD_ID` にテスト用サーバーの ID を
+足すと、そのサーバーにだけ即時反映される
 （サーバー名を右クリック →「サーバーIDをコピー」。開発者モードが要る）。
+
+```bash
+DISCORD_APPLICATION_ID=<APPLICATION ID> DISCORD_GUILD_ID=<サーバーID> npm run register
+```
 
 定義は `scripts/register-commands.mjs` の `COMMANDS`。PUT の一括上書きなので、
 **何度実行してもコマンドは重複しない**。定義から消せば Discord 側からも消える。
 
-### 5. ローカル開発
+### 6. ローカル開発
 
 ```bash
 cp .dev.vars.example .dev.vars   # DISCORD_PUBLIC_KEY / DISCORD_BOT_TOKEN を書く
 npm run dev                      # http://127.0.0.1:8787
 node --test test/interaction.test.mjs   # 署名検証の自己チェック（別ターミナルで dev 起動中に）
 node --test test/register-commands.test.mjs   # コマンド定義の自己チェック
+node --test test/setup-docs.test.mjs    # 手順と secret の置き場所の自己チェック
 ```
 
 Discord から手元へ届かせたい場合は `cloudflared tunnel --url http://127.0.0.1:8787` などで
