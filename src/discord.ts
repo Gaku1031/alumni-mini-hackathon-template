@@ -137,7 +137,9 @@ export function modalValues(rows: ModalRow[] = []): Record<string, string> {
 }
 
 /**
- * 入力用の小窓を開く。Modal は deferred できない（type:5 を返したあとに開けない）ので、
+ * 入力用の小窓を開く。組み立て済みの MessageBody をそのまま渡す
+ * （modalBody() で作ったものでも、render.ts 側で直接組み立てたものでも良い）。
+ * Modal は deferred できない（type:5 を返したあとに開けない）ので、
  * これを返す前に重い処理を挟まないこと。
  */
 export function modal(body: MessageBody): Response {
