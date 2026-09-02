@@ -4,6 +4,7 @@
  * DB も Discord API も触らない純関数なので、単体でテストできる。
  *
  * 注文フェーズが renderOpen、締め切ったあとの集金フェーズが renderClosed。
+ * ボタンから開く Modal の中身（newItemModal）も、同じ理由でここに置く。
  */
 
 import type { BentoEvent, Order } from "./db";
@@ -21,6 +22,11 @@ export type ItemGroup = {
 const ACTION_ROW = 1;
 const BUTTON = 2;
 const STRING_SELECT = 3;
+const TEXT_INPUT = 4;
+
+/** テキスト欄の style。1行が SHORT、複数行で受けるものは PARAGRAPH */
+const SHORT = 1;
+const PARAGRAPH = 2;
 
 /** ボタンの style */
 const PRIMARY = 1;
@@ -122,6 +128,67 @@ export function renderOpen(
   return {
     embeds: [{ title: `📌 ${event.title}`, description }],
     components: rows,
+  };
+}
+
+/**
+ * 締め切り Modal の custom_id。うしろに集計メッセージの id を繋げて、
+ * submit されたときにどのイベントの締め切りかを引き当てる。
+ */
+export const CLOSE_MODAL = "close_modal:";
+
+/**
+ * `[締め切る]` で開く共通費用の入力欄。
+ * この窓が開くこと自体が確認ステップなので、「本当に締め切りますか」は聞かない。
+ * 共通費用が無い会もあるので required は付けない（空のまま送れば ¥0 で締まる）。
+ */
+export function renderCloseModal(messageId: string): MessageBody {
+  return {
+    custom_id: `${CLOSE_MODAL}${messageId}`,
+    title: "締め切る",
+    components: [
+      row({
+        type: TEXT_INPUT,
+        custom_id: "shared_costs",
+        style: PARAGRAPH,
+        label: "共通費用",
+        placeholder: "配送料 500\nAPI代 300",
+        required: false,
+      }),
+    ],
+  };
+}
+
+/**
+ * `[新しく入力]` で開く Modal の中身。品名と金額の2欄だけ。
+ *
+ * 送信された Modal には「どのメッセージから開いたか」が付いてこないので、
+ * custom_id に元メッセージの id を載せて持ち回る。イベントはそこから引く。
+ */
+export function newItemModal(messageId: string): MessageBody {
+  return {
+    custom_id: `new_item:${messageId}`,
+    title: "注文を入力",
+    components: [
+      row({
+        type: TEXT_INPUT,
+        custom_id: "item_name",
+        label: "品名",
+        style: SHORT,
+        placeholder: "唐揚げ弁当",
+        max_length: LIMIT,
+        required: true,
+      }),
+      // 金額は検算しない。桁を間違えても集計メッセージに大きく出るので人間が気づく
+      row({
+        type: TEXT_INPUT,
+        custom_id: "price",
+        label: "金額（円）",
+        style: SHORT,
+        placeholder: "650",
+        required: true,
+      }),
+    ],
   };
 }
 
