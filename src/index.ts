@@ -3,10 +3,19 @@
  * ルーティングが無いのでフレームワークも入れていない。
  */
 
-import { createEvent, setMessageId } from "./db";
+import { addOrder, createEvent, getEventByMessage, listOrders, setMessageId } from "./db";
 import type { ModalRow } from "./discord";
-import { modal, modalValues, pong, postMessage, reply } from "./discord";
-import { renderOpen } from "./render";
+import {
+  ackUpdate,
+  modal,
+  modalBody,
+  modalValues,
+  patchMessage,
+  pong,
+  postMessage,
+  reply,
+} from "./discord";
+import { newItemModal, renderOpen } from "./render";
 
 /** Discord が送ってくる interaction type のうち、使うものだけ */
 const PING = 1;
@@ -14,8 +23,14 @@ const APPLICATION_COMMAND = 2;
 const MESSAGE_COMPONENT = 3;
 const MODAL_SUBMIT = 5;
 
+/** `[新しく入力]` のボタンと、そこから開く Modal（`new_item:<元メッセージ id>`） */
+const NEW_ITEM = "new_item";
+
 /** `/bento` で開く Modal。送信されたときにこの custom_id で戻ってくる */
 const CREATE_MODAL = "create_event";
+
+/** 使う分だけ。Discord の payload を全部写しても読めるものは増えない */
+type DiscordUser = { id: string; username: string; global_name?: string | null };
 
 /** 受け取る側で見るところだけ書いた interaction。全部は要らない */
 type Interaction = {
@@ -25,8 +40,12 @@ type Interaction = {
   data?: {
     name?: string;
     custom_id?: string;
+    /** Modal の入力欄。ACTION_ROW の中に1つずつ入っている */
     components?: ModalRow[];
   };
+  message?: { id: string };
+  member?: { nick?: string | null; user: DiscordUser };
+  user?: DiscordUser;
 };
 
 function hexToBytes(hex: string): Uint8Array {
@@ -62,6 +81,25 @@ async function verifySignature(req: Request, rawBody: string, publicKey: string)
   );
 }
 
+/** 押した人。ギルド内なら member、DM なら user から来る */
+function actor(interaction: Interaction): { id: string; name: string } {
+  const user = interaction.member?.user ?? interaction.user;
+  if (!user) return { id: "unknown", name: "?" };
+  // サーバー内のニックネームが本人の見えている名前なので、あればそれを使う
+  return { id: user.id, name: interaction.member?.nick || user.global_name || user.username };
+}
+
+/**
+ * 金額。上限も相場も見ない（桁を間違えても集計メッセージに出るので人間が気づく）が、
+ * 数値として読めないものは入れない。「¥1,200」「１２００円」までは読む。
+ */
+function parsePrice(input: string): number | null {
+  const digits = input
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/[¥￥,、\s円]/g, "");
+  return /^\d+$/.test(digits) ? Number(digits) : null;
+}
+
 /**
  * 募集を1件立てて、空の集計メッセージをチャンネルに貼る。
  * 投稿して初めて message_id が決まるので、貼ったあとに書き戻す。
@@ -81,15 +119,17 @@ async function openEvent(
 function handleCommand(interaction: Interaction): Response {
   if (interaction.data?.name !== "bento") return reply("未実装");
 
-  return modal(CREATE_MODAL, "お弁当の募集", [
-    { custom_id: "title", label: "タイトル", placeholder: "9/15(月) お弁当", required: true },
-    {
-      custom_id: "menu_url",
-      label: "メニューのURL（任意）",
-      placeholder: "https://tenpo.example.com/bento",
-      required: false,
-    },
-  ]);
+  return modal(
+    modalBody(CREATE_MODAL, "お弁当の募集", [
+      { custom_id: "title", label: "タイトル", placeholder: "9/15(月) お弁当", required: true },
+      {
+        custom_id: "menu_url",
+        label: "メニューのURL（任意）",
+        placeholder: "https://tenpo.example.com/bento",
+        required: false,
+      },
+    ]),
+  );
 }
 
 function handleModal(interaction: Interaction, env: Env, ctx: ExecutionContext): Response {
@@ -110,6 +150,81 @@ function handleModal(interaction: Interaction, env: Env, ctx: ExecutionContext):
   return reply(`「${title}」の募集をこのチャンネルに出しました。`);
 }
 
+/**
+ * `[新しく入力]` の Modal 送信。ここで入った品が次の人の `[頼む ▼]` の選択肢になる。
+ *
+ * D1 は速いので読み書きはこの場で終わらせ、遅い Discord API の PATCH だけ waitUntil に載せる。
+ * 断るとき（金額が読めない・締め切り済み・すでに注文済み）は本人にだけ見える返事で止める。
+ */
+async function handleNewItem(
+  interaction: Interaction,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const fields = modalValues(interaction.data?.components);
+  const itemName = (fields.item_name ?? "").trim();
+  const price = parsePrice(fields.price ?? "");
+  if (!itemName) return reply("品名を入れてください");
+  if (price === null) return reply("金額は数字で入れてください（例: 650）");
+
+  const messageId = (interaction.data?.custom_id ?? "").slice(NEW_ITEM.length + 1);
+  const event = await getEventByMessage(env.DB, messageId);
+  if (!event) return reply("この集計メッセージのイベントが見つかりません");
+  if (event.status === "closed") return reply("この弁当は締め切り済みです");
+
+  const who = actor(interaction);
+  const added = await addOrder(env.DB, {
+    eventId: event.id,
+    discordUserId: who.id,
+    displayName: who.name,
+    itemName,
+    price,
+  });
+  // 1人1個。入れ直したいときは [取り消す ▼] で消してもらう
+  if (!added.ok)
+    return reply("すでに頼んでいます。変えるときは [取り消す ▼] で消してから入れ直してください");
+
+  return ackUpdate(ctx, async () => {
+    const orders = await listOrders(env.DB, event.id);
+    const body = renderOpen(event, orders);
+    await patchMessage(env.DISCORD_BOT_TOKEN, event.channel_id, messageId, body);
+  });
+}
+
+/**
+ * 署名検証を通ったあとの本体。押されたものごとに分岐する。
+ * 署名の検証と切り離してあるので、この関数は interaction をそのまま渡せばテストできる。
+ */
+export async function handleInteraction(
+  interaction: Interaction,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const customId = interaction.data?.custom_id ?? "";
+
+  switch (interaction.type) {
+    case PING:
+      return pong();
+
+    case APPLICATION_COMMAND:
+      return handleCommand(interaction);
+
+    case MESSAGE_COMPONENT:
+      // Modal は deferred できない。DB を触らず、あとで引けるように
+      // 元メッセージの id だけ持たせて即返す
+      if (customId === NEW_ITEM) return modal(newItemModal(interaction.message?.id ?? ""));
+      return reply("未実装");
+
+    case MODAL_SUBMIT:
+      if (customId === CREATE_MODAL) return handleModal(interaction, env, ctx);
+      if (customId.startsWith(`${NEW_ITEM}:`)) return handleNewItem(interaction, env, ctx);
+      return reply("未実装");
+
+    default:
+      return new Response("unknown interaction type", { status: 400 });
+  }
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Discord は POST しか投げてこない。それ以外は受け付けない
@@ -123,25 +238,6 @@ export default {
       return new Response("invalid request signature", { status: 401 });
     }
 
-    const interaction: Interaction = JSON.parse(rawBody);
-
-    switch (interaction.type) {
-      case PING:
-        return pong();
-
-      case APPLICATION_COMMAND:
-        return handleCommand(interaction);
-
-      case MODAL_SUBMIT:
-        return handleModal(interaction, env, ctx);
-
-      case MESSAGE_COMPONENT:
-        // ここから先が本体。重い処理を挟むなら discord.ts の deferred(ctx, work) を
-        // 返して、あとで patchMessage で元メッセージを差し替える
-        return reply("未実装");
-
-      default:
-        return new Response("unknown interaction type", { status: 400 });
-    }
+    return handleInteraction(JSON.parse(rawBody), env, ctx);
   },
 } satisfies ExportedHandler<Env>;

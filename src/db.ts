@@ -13,6 +13,9 @@ values (?, ?, ?, ?, ?)`;
 
 const SELECT_EVENT = `select * from bento_events where id = ?`;
 
+// ボタンが押されたときに分かるのは押されたメッセージだけ。そこからイベントを引く
+const SELECT_EVENT_BY_MESSAGE = `select * from bento_events where message_id = ?`;
+
 const UPDATE_EVENT_MESSAGE = `update bento_events set message_id = ? where id = ?`;
 
 const CLOSE_EVENT = `update bento_events set status = 'closed', shared_costs = ? where id = ?`;
@@ -91,7 +94,18 @@ export async function createEvent(
 }
 
 export async function getEvent(db: D1Database, eventId: string): Promise<BentoEvent | null> {
-  const row = await db.prepare(SELECT_EVENT).bind(eventId).first<EventRow>();
+  return toEvent(await db.prepare(SELECT_EVENT).bind(eventId).first<EventRow>());
+}
+
+/** 集計メッセージ上のボタン・セレクト・Modal から、対象のイベントに戻る */
+export async function getEventByMessage(
+  db: D1Database,
+  messageId: string,
+): Promise<BentoEvent | null> {
+  return toEvent(await db.prepare(SELECT_EVENT_BY_MESSAGE).bind(messageId).first<EventRow>());
+}
+
+function toEvent(row: EventRow | null): BentoEvent | null {
   if (!row) return null;
   return { ...row, shared_costs: JSON.parse(row.shared_costs) };
 }

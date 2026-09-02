@@ -12,6 +12,7 @@ const API = "https://discord.com/api/v10";
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
+const DEFERRED_UPDATE_MESSAGE = 6;
 const MODAL = 9;
 
 /** Modal の中身。テキスト欄は1つずつ action row に入れないと Discord が受け付けない */
@@ -101,28 +102,25 @@ export type TextField = {
   paragraph?: boolean;
 };
 
-/** 入力用の小窓を開かせる。開くこと自体が確認ステップになるので、押し間違いが事故にならない */
-export function modal(customId: string, title: string, fields: TextField[]): Response {
-  return json({
-    type: MODAL,
-    data: {
-      custom_id: customId,
-      title,
-      components: fields.map((field) => ({
-        type: ACTION_ROW,
-        components: [
-          {
-            type: TEXT_INPUT,
-            style: field.paragraph ? PARAGRAPH : SHORT,
-            custom_id: field.custom_id,
-            label: field.label,
-            required: field.required,
-            placeholder: field.placeholder,
-          },
-        ],
-      })),
-    },
-  });
+/** 品名・タイトルなど、テキスト欄の並びから Modal のボディを組み立てる */
+export function modalBody(customId: string, title: string, fields: TextField[]): MessageBody {
+  return {
+    custom_id: customId,
+    title,
+    components: fields.map((field) => ({
+      type: ACTION_ROW,
+      components: [
+        {
+          type: TEXT_INPUT,
+          style: field.paragraph ? PARAGRAPH : SHORT,
+          custom_id: field.custom_id,
+          label: field.label,
+          required: field.required,
+          placeholder: field.placeholder,
+        },
+      ],
+    })),
+  };
 }
 
 /** Modal 送信で返ってくる入れ子を custom_id → 値 にほぐす */
@@ -136,6 +134,24 @@ export function modalValues(rows: ModalRow[] = []): Record<string, string> {
     }
   }
   return values;
+}
+
+/**
+ * 入力用の小窓を開く。Modal は deferred できない（type:5 を返したあとに開けない）ので、
+ * これを返す前に重い処理を挟まないこと。
+ */
+export function modal(body: MessageBody): Response {
+  return json({ type: MODAL, data: body });
+}
+
+/**
+ * 「受け付けた」とだけ返して画面には何も出さない。
+ * 集計メッセージそのものを patchMessage で貼り替えるので、本人向けの返事は要らない。
+ * 押したメッセージ由来の interaction（コンポーネント・そこから開いた Modal）でだけ使える。
+ */
+export function ackUpdate(ctx: ExecutionContext, work: () => Promise<unknown>): Response {
+  ctx.waitUntil(work());
+  return json({ type: DEFERRED_UPDATE_MESSAGE });
 }
 
 /**
