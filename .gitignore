@@ -5,3 +5,6 @@ worker-configuration.d.ts
 .DS_Store
 .playwright-cli/
 .next/
+
+# hatoba のローカル状態
+.hatoba/
