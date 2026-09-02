@@ -1,36 +1,40 @@
 /**
  * src/*.ts を型だけ落として読み込む。
  *
- * 単体のファイルなら data: URL に流し込めば済む（test/db.test.mjs がそうしている）が、
- * src/index.ts のように `./discord` を import しているものは相対パスの解決先が無くなる。
- * なので src/ をまるごと一時ディレクトリに .mjs として並べ直してから読む。
- * ビルド手順を足さずに、ソースそのものを動かすための最小限の仕掛け。
- *
+ *   const { handleInteraction } = await loadSrc("index");
  *   const worker = (await loadSrc("index.mjs")).default;
+ *
+ * 1ファイルで完結する db.ts や discord.ts は data: URL に流し込めば読めるが、
+ * index.ts は ./db や ./discord を import するので相対パスが解ける場所が要る。
+ * 一時ディレクトリに .mjs として書き出し、import 先だけ書き換えて読む。
+ * ビルド手順は増やさない（テストの中だけの話にする）。
  */
-
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
 const SRC = new URL("../../src/", import.meta.url);
 
-export async function loadSrc(entry) {
-  const dir = mkdtempSync(join(tmpdir(), "bento-src-"));
-  try {
-    for (const file of readdirSync(fileURLToPath(SRC))) {
-      // .d.ts は型だけなので落とすと空になる。読む必要も無い
-      if (!file.endsWith(".ts") || file.endsWith(".d.ts")) continue;
-      const source = stripTypeScriptTypes(readFileSync(new URL(file, SRC), "utf8"));
-      // `from "./discord"` のままでは拡張子が無くて解決できない
-      const code = source.replaceAll(/(from ")\.\/([\w-]+)"/g, '$1./$2.mjs"');
-      writeFileSync(join(dir, file.replace(/\.ts$/, ".mjs")), code);
-    }
-    return await import(pathToFileURL(join(dir, entry)).href);
-  } finally {
-    // import が終われば読み込みは済んでいる。実体は残さない
-    rmSync(dir, { recursive: true, force: true });
+/** 書き出しは1回だけ。同じファイルを import すれば同じモジュールになる */
+let dir;
+
+function build() {
+  const out = mkdtempSync(join(tmpdir(), "bento-src-"));
+  for (const file of readdirSync(SRC)) {
+    if (!file.endsWith(".ts") || file.endsWith(".d.ts")) continue;
+    const source = stripTypeScriptTypes(readFileSync(new URL(file, SRC), "utf8"));
+    // `from "./db"` は Node では解決できない。拡張子を足す
+    const code = source.replace(/(from\s+")(\.\/[\w-]+)(")/g, "$1$2.mjs$3");
+    writeFileSync(join(out, file.replace(/\.ts$/, ".mjs")), code);
   }
+  return out;
+}
+
+export function loadSrc(entry) {
+  dir ??= build();
+  // "index" でも "index.mjs" でも受け付ける
+  const file = entry.endsWith(".mjs") ? entry : `${entry}.mjs`;
+  return import(pathToFileURL(join(dir, file)).href);
 }

@@ -13,7 +13,7 @@ values (?, ?, ?, ?, ?)`;
 
 const SELECT_EVENT = `select * from bento_events where id = ?`;
 
-// ボタンから来る interaction が持っているのは押されたメッセージの id だけ
+// ボタン・セレクト・Modal から分かるのは押されたメッセージの id だけ。そこからイベントを引く
 const SELECT_EVENT_BY_MESSAGE = `select * from bento_events where message_id = ?`;
 
 const UPDATE_EVENT_MESSAGE = `update bento_events set message_id = ? where id = ?`;
@@ -104,8 +104,8 @@ export async function getEvent(db: D1Database, eventId: string): Promise<BentoEv
   return toEvent(await db.prepare(SELECT_EVENT).bind(eventId).first<EventRow>());
 }
 
-/** 集計メッセージのボタンを押されたとき、そのメッセージからイベントを引く */
-export async function getEventByMessageId(
+/** 集計メッセージ上のボタン・セレクト・Modal から、対象のイベントに戻る */
+export async function getEventByMessage(
   db: D1Database,
   messageId: string,
 ): Promise<BentoEvent | null> {
