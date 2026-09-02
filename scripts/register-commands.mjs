@@ -58,6 +58,20 @@ function loadDevVars() {
 }
 
 /**
+ * 送信するコマンド定義を作る。
+ * `contexts` はグローバル登録専用のフィールドで、ギルドコマンドは元からそのサーバー限定なので、
+ * 付けたまま送ると Discord に 400 で弾かれる。
+ */
+export function commandsFor(guildId) {
+  if (!guildId) return COMMANDS;
+  return COMMANDS.map((command) => {
+    const guildCommand = { ...command };
+    delete guildCommand.contexts;
+    return guildCommand;
+  });
+}
+
+/**
  * COMMANDS をまるごと Discord に反映する。
  * POST（1件ずつ追加）ではなく PUT（一括上書き）を使うのが肝で、
  * これで再実行してもコマンドが重複しない。
@@ -72,7 +86,7 @@ export async function register({ applicationId, botToken, guildId, fetch = globa
       authorization: `Bot ${botToken}`,
       "content-type": "application/json",
     },
-    body: JSON.stringify(COMMANDS),
+    body: JSON.stringify(commandsFor(guildId)),
   });
   if (!res.ok) {
     throw new Error(`Discord API が ${res.status} を返した: ${await res.text()}`);

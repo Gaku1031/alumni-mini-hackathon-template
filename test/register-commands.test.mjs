@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { COMMANDS, register } from "../scripts/register-commands.mjs";
+import { COMMANDS, commandsFor, register } from "../scripts/register-commands.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/register-commands.mjs", import.meta.url));
 const run = promisify(execFile);
@@ -128,6 +128,26 @@ test("DISCORD_GUILD_ID があればそのサーバー向けの URL に送る", a
     },
   });
   assert.equal(sent, "https://discord.com/api/v10/applications/123/guilds/456/commands");
+});
+
+// contexts はグローバルコマンド専用のフィールド。ギルド登録で付けたまま送ると 400 で弾かれる
+test("ギルド登録では contexts を落とし、グローバル登録では残す", async () => {
+  for (const command of commandsFor("456")) {
+    assert.equal(
+      "contexts" in command,
+      false,
+      `${command.name}: ギルド登録の payload に contexts が残っている`,
+    );
+    // 落とすのは contexts だけ。他のフィールドはそのまま送る
+    assert.ok(command.name && command.description);
+    assert.ok(Array.isArray(command.options));
+  }
+
+  assert.deepEqual(commandsFor(undefined), COMMANDS);
+  assert.ok(
+    COMMANDS.every((c) => Array.isArray(c.contexts)),
+    "グローバル登録では DM を弾くために contexts が要る",
+  );
 });
 
 test("package.json に register スクリプトがある", () => {
