@@ -4,6 +4,7 @@
  * DB も Discord API も触らない純関数なので、単体でテストできる。
  *
  * 注文フェーズが renderOpen、締め切ったあとの集金フェーズが renderClosed。
+ * ボタンから開く Modal の中身（newItemModal）も、同じ理由でここに置く。
  */
 
 import type { MessageBody } from "./discord";
@@ -34,6 +35,10 @@ export type ItemGroup = {
 const ACTION_ROW = 1;
 const BUTTON = 2;
 const STRING_SELECT = 3;
+const TEXT_INPUT = 4;
+
+/** テキスト欄の style。1行が SHORT */
+const SHORT = 1;
 
 /** ボタンの style */
 const PRIMARY = 1;
@@ -127,6 +132,39 @@ export function renderOpen(event: BentoEvent, orders: Order[]): MessageBody {
   return {
     embeds: [{ title: `📌 ${event.title}`, description }],
     components: rows,
+  };
+}
+
+/**
+ * `[新しく入力]` で開く Modal の中身。品名と金額の2欄だけ。
+ *
+ * 送信された Modal には「どのメッセージから開いたか」が付いてこないので、
+ * custom_id に元メッセージの id を載せて持ち回る。イベントはそこから引く。
+ */
+export function newItemModal(messageId: string): MessageBody {
+  return {
+    custom_id: `new_item:${messageId}`,
+    title: "注文を入力",
+    components: [
+      row({
+        type: TEXT_INPUT,
+        custom_id: "item_name",
+        label: "品名",
+        style: SHORT,
+        placeholder: "唐揚げ弁当",
+        max_length: LIMIT,
+        required: true,
+      }),
+      // 金額は検算しない。桁を間違えても集計メッセージに大きく出るので人間が気づく
+      row({
+        type: TEXT_INPUT,
+        custom_id: "price",
+        label: "金額（円）",
+        style: SHORT,
+        placeholder: "650",
+        required: true,
+      }),
+    ],
   };
 }
 

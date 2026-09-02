@@ -12,6 +12,8 @@ const API = "https://discord.com/api/v10";
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
+const DEFERRED_UPDATE_MESSAGE = 6;
+const MODAL = 9;
 
 /** 本人にしか見えないメッセージ */
 const EPHEMERAL = 64;
@@ -82,6 +84,24 @@ export function pong(): Response {
 /** その場で返せる短い返事。押した本人にしか見せない */
 export function reply(content: string): Response {
   return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+}
+
+/**
+ * 入力用の小窓を開く。Modal は deferred できない（type:5 を返したあとに開けない）ので、
+ * これを返す前に重い処理を挟まないこと。
+ */
+export function modal(body: MessageBody): Response {
+  return json({ type: MODAL, data: body });
+}
+
+/**
+ * 「受け付けた」とだけ返して画面には何も出さない。
+ * 集計メッセージそのものを patchMessage で貼り替えるので、本人向けの返事は要らない。
+ * 押したメッセージ由来の interaction（コンポーネント・そこから開いた Modal）でだけ使える。
+ */
+export function ackUpdate(ctx: ExecutionContext, work: () => Promise<unknown>): Response {
+  ctx.waitUntil(work());
+  return json({ type: DEFERRED_UPDATE_MESSAGE });
 }
 
 /**
