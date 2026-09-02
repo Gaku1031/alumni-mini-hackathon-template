@@ -3,17 +3,13 @@
  * ルーティングが無いのでフレームワークも入れていない。
  */
 
+import { pong, reply } from "./discord";
+
 /** Discord が送ってくる interaction type のうち、使うものだけ */
 const PING = 1;
 const APPLICATION_COMMAND = 2;
 const MESSAGE_COMPONENT = 3;
 const MODAL_SUBMIT = 5;
-
-/** 返す type */
-const PONG = 1;
-const CHANNEL_MESSAGE = 4;
-
-const EPHEMERAL = 64;
 
 function hexToBytes(hex: string): Uint8Array {
   const bytes = new Uint8Array(hex.length / 2);
@@ -48,19 +44,12 @@ async function verifySignature(req: Request, rawBody: string, publicKey: string)
   );
 }
 
-function json(body: unknown) {
-  return new Response(JSON.stringify(body), {
-    headers: { "content-type": "application/json" },
-  });
-}
-
-function reply(content: string) {
-  return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
-}
-
 export default {
   async fetch(req: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
-    if (req.method !== "POST") return new Response("ok");
+    // Discord は POST しか投げてこない。それ以外は受け付けない
+    if (req.method !== "POST") {
+      return new Response("method not allowed", { status: 405, headers: { allow: "POST" } });
+    }
 
     // 生ボディが要る。先に req.json() すると署名検証ができなくなる
     const rawBody = await req.text();
@@ -72,13 +61,13 @@ export default {
 
     switch (interaction.type) {
       case PING:
-        return json({ type: PONG });
+        return pong();
 
       case APPLICATION_COMMAND:
       case MESSAGE_COMPONENT:
       case MODAL_SUBMIT:
-        // ここから先が本体。重い処理を挟むなら deferred (type: 5) を返して
-        // _ctx.waitUntil() で続きを回し、あとで元メッセージを PATCH する
+        // ここから先が本体。重い処理を挟むなら discord.ts の deferred(_ctx, work) を
+        // 返して、あとで patchMessage で元メッセージを差し替える
         return reply("未実装");
 
       default:

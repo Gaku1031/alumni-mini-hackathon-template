@@ -2,3 +2,7 @@
 DISCORD_PUBLIC_KEY=
 # Bot > Token（集計メッセージを PATCH するのに使う）
 DISCORD_BOT_TOKEN=
+# General Information > Application ID（`npm run register` だけが使う。Worker は使わない）
+DISCORD_APPLICATION_ID=
+# 開発中にコマンドを1サーバーだけへ即時反映したいとき（空ならグローバル登録）
+DISCORD_GUILD_ID=

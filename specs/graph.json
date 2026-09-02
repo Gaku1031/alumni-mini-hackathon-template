@@ -91,11 +91,17 @@
         "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G94k"
       },
       "lane": {
-        "state": "pending",
-        "branch": null,
-        "worktree": null,
+        "state": "blocked",
+        "branch": "issue-2-verify-signature-ping",
+        "worktree": "/Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-2-verify-signature-ping",
         "pr": null,
-        "lastLine": null
+        "lastLine": null,
+        "startedAt": 1788363231426,
+        "lastLineAt": 1788363231426,
+        "reason": "Command failed: git worktree add /Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-2-verify-signature-ping issue-2-verify-signature-ping\nPreparing worktree (checking out 'issue-2-verify-signature-ping')\nfatal: 'issue-2-",
+        "kind": "error",
+        "attempts": 3,
+        "instruction": "前回のレーンは次の理由で落ちました。原因を取り除いたうえで、実装を最後まで終わらせてください。\n\nCommand failed: git worktree add /Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-2-verify-signature-ping issue-2-verify-signature-ping\nPreparing worktree (checking out 'issue-2-verify-signature-ping')\nfatal: 'issue-2-"
       },
       "closed": false
     },
@@ -149,11 +155,17 @@
         "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G95k"
       },
       "lane": {
-        "state": "pending",
-        "branch": null,
-        "worktree": null,
+        "state": "blocked",
+        "branch": "issue-3-d1-initial-migrations",
+        "worktree": "/Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-3-d1-initial-migrations",
         "pr": null,
-        "lastLine": null
+        "lastLine": null,
+        "startedAt": 1788363230268,
+        "lastLineAt": 1788363230268,
+        "reason": "Command failed: git worktree add /Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-3-d1-initial-migrations issue-3-d1-initial-migrations\nPreparing worktree (checking out 'issue-3-d1-initial-migrations')\nfatal: 'issue-3-",
+        "kind": "error",
+        "attempts": 3,
+        "instruction": "前回のレーンは次の理由で落ちました。原因を取り除いたうえで、実装を最後まで終わらせてください。\n\nCommand failed: git worktree add /Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-3-d1-initial-migrations issue-3-d1-initial-migrations\nPreparing worktree (checking out 'issue-3-d1-initial-migrations')\nfatal: 'issue-3-"
       },
       "closed": false
     },
@@ -647,11 +659,17 @@
         "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-CE"
       },
       "lane": {
-        "state": "pending",
-        "branch": null,
-        "worktree": null,
+        "state": "blocked",
+        "branch": "issue-11-split-cost-calc",
+        "worktree": "/Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-11-split-cost-calc",
         "pr": null,
-        "lastLine": null
+        "lastLine": null,
+        "startedAt": 1788363230769,
+        "lastLineAt": 1788363230769,
+        "reason": "Command failed: git worktree add /Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-11-split-cost-calc issue-11-split-cost-calc\nPreparing worktree (checking out 'issue-11-split-cost-calc')\nfatal: 'issue-11-split-cost-cal",
+        "kind": "error",
+        "attempts": 3,
+        "instruction": "前回のレーンは次の理由で落ちました。原因を取り除いたうえで、実装を最後まで終わらせてください。\n\nCommand failed: git worktree add /Users/gakuinoue/workspace/ideas/alumni-mini-hackathon-template/.hatoba/worktrees/issue-11-split-cost-calc/.hatoba/worktrees/issue-11-split-cost-calc issue-11-split-cost-calc\nPreparing worktree (checking out 'issue-11-split-cost-calc')\nfatal: 'issue-11-split-cost-cal"
       },
       "closed": false
     },
