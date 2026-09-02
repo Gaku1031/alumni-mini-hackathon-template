@@ -8,9 +8,12 @@
  */
 
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const read = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
 const trim = (line) => line.trim();
 
@@ -86,14 +89,17 @@ test("wrangler.jsonc の vars に secret を書いていない", () => {
   }
 });
 
-test(".dev.vars は gitignore されていて、リポジトリに存在しない", () => {
+// 手元に .dev.vars があること自体は正しい（README どおりならある。テストも一時的に書く）。
+// 問題なのはそれがリポジトリに入ってしまうことなので、git の追跡対象かどうかで見る
+test(".dev.vars は gitignore されていて、リポジトリに入っていない", () => {
   const ignored = read(".gitignore").split("\n").map(trim);
   assert.ok(ignored.includes(".dev.vars"), ".gitignore に .dev.vars が無い");
-  assert.equal(
-    existsSync(new URL("../.dev.vars", import.meta.url)),
-    false,
-    ".dev.vars がコミットされている",
-  );
+
+  const tracked = execFileSync("git", ["ls-files", "--", ".dev.vars"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(tracked, "", ".dev.vars が git の追跡対象になっている");
 });
 
 test("README にローカルと本番、両方のマイグレーション手順がある", () => {
