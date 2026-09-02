@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "test": "node --test test/*.test.mjs",
     "deploy": "wrangler deploy",
     "db:create": "wrangler d1 create bento",
     "db:new": "wrangler d1 migrations create bento",

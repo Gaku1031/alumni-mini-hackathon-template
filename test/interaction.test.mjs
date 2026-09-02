@@ -9,11 +9,24 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { after, before, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const URL_ = "http://127.0.0.1:8787";
+/** 空きポートを OS に選ばせる。決め打つと他のツールとぶつかる */
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+let URL_;
 
 const { publicKey, privateKey } = generateKeyPairSync("ed25519");
 const publicKeyHex = publicKey.export({ type: "spki", format: "der" }).subarray(12).toString("hex");
@@ -30,11 +43,18 @@ function signed(body) {
 }
 
 let dev;
+/** テスト用の鍵で .dev.vars を上書きするので、本物は退避して必ず戻す */
+let savedDevVars = null;
 
 before(async () => {
+  if (existsSync(".dev.vars")) savedDevVars = readFileSync(".dev.vars");
   writeFileSync(".dev.vars", `DISCORD_PUBLIC_KEY=${publicKeyHex}\nDISCORD_BOT_TOKEN=dummy\n`);
-  dev = spawn("npx", ["wrangler", "dev", "--port", "8787"], { stdio: "ignore" });
+
+  const port = await freePort();
+  URL_ = `http://127.0.0.1:${port}`;
+  dev = spawn("npx", ["wrangler", "dev", "--port", String(port)], { stdio: "ignore" });
   for (let i = 0; i < 60; i++) {
+    // ここで待つのは「起動したか」だけ。応答の中身は各テストで見る
     try {
       await fetch(URL_);
       return;
@@ -45,7 +65,10 @@ before(async () => {
   throw new Error("wrangler dev が起動しなかった");
 });
 
-after(() => dev?.kill());
+after(() => {
+  dev?.kill();
+  if (savedDevVars !== null) writeFileSync(".dev.vars", savedDevVars);
+});
 
 test("正しい署名の PING に PONG を返す", async () => {
   const body = JSON.stringify({ type: 1 });
