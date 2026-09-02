@@ -14,6 +14,12 @@ const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
 const MODAL = 9;
 
+/** Modal の中身。テキスト欄は1つずつ action row に入れないと Discord が受け付けない */
+const ACTION_ROW = 1;
+const TEXT_INPUT = 4;
+const SHORT = 1;
+const PARAGRAPH = 2;
+
 /** 本人にしか見えないメッセージ */
 const EPHEMERAL = 64;
 
@@ -85,11 +91,59 @@ export function reply(content: string): Response {
   return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
 }
 
+/** Modal に置くテキスト欄1つぶん */
+export type TextField = {
+  custom_id: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  /** 複数行にするか */
+  paragraph?: boolean;
+};
+
+/** 入力用の小窓を開かせる。開くこと自体が確認ステップになるので、押し間違いが事故にならない */
+export function modal(customId: string, title: string, fields: TextField[]): Response {
+  return json({
+    type: MODAL,
+    data: {
+      custom_id: customId,
+      title,
+      components: fields.map((field) => ({
+        type: ACTION_ROW,
+        components: [
+          {
+            type: TEXT_INPUT,
+            style: field.paragraph ? PARAGRAPH : SHORT,
+            custom_id: field.custom_id,
+            label: field.label,
+            required: field.required,
+            placeholder: field.placeholder,
+          },
+        ],
+      })),
+    },
+  });
+}
+
+/** Modal 送信で返ってくる入れ子を custom_id → 値 にほぐす */
+export type ModalRow = { components?: { custom_id: string; value?: string }[] };
+
+export function modalValues(rows: ModalRow[] = []): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const row of rows) {
+    for (const field of row.components ?? []) {
+      values[field.custom_id] = field.value ?? "";
+    }
+  }
+  return values;
+}
+
 /**
- * 入力欄を開く。deferred したあとには出せないので、その場で返すこと。
- * 開いている間は Discord 側で待ってくれるので、3秒制限に追われない。
+ * 組み立て済みの Modal データをそのまま開く。render.ts 側でフィールド構成を決めている
+ * ケース（TextField の単純な列挙に収まらない）向け。deferred したあとには出せないので、
+ * その場で返すこと。開いている間は Discord 側で待ってくれるので、3秒制限に追われない。
  */
-export function modal(data: MessageBody): Response {
+export function modalResponse(data: MessageBody): Response {
   return json({ type: MODAL, data });
 }
 

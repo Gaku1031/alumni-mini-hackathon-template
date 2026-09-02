@@ -89,7 +89,10 @@ export async function createEvent(
 ): Promise<string> {
   const id = crypto.randomUUID();
   const { guildId, channelId, title, menuUrl } = input;
-  await db.prepare(INSERT_EVENT).bind(id, guildId, channelId, title, menuUrl ?? null).run();
+  await db
+    .prepare(INSERT_EVENT)
+    .bind(id, guildId, channelId, title, menuUrl ?? null)
+    .run();
   return id;
 }
 
@@ -171,7 +174,10 @@ export async function deleteOrder(db: D1Database, orderId: string): Promise<bool
 }
 
 export async function setPaid(db: D1Database, orderId: string, paid: boolean): Promise<void> {
-  await db.prepare(UPDATE_PAID).bind(paid ? 1 : 0, orderId).run();
+  await db
+    .prepare(UPDATE_PAID)
+    .bind(paid ? 1 : 0, orderId)
+    .run();
 }
 
 export async function distinctItems(db: D1Database, eventId: string): Promise<MenuItem[]> {

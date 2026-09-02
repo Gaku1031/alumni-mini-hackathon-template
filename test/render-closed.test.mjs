@@ -40,7 +40,10 @@ const six = () => [
 ];
 
 const delivery = [{ label: "配送料", amount: 500 }];
-const closed = (sharedCosts = delivery) => ({ title: "9/15(月) お弁当", shared_costs: sharedCosts });
+const closed = (sharedCosts = delivery) => ({
+  title: "9/15(月) お弁当",
+  shared_costs: sharedCosts,
+});
 
 /** 本番と同じ順で splitShared を通してから描く */
 const render = (event, orders, paypayUrl) =>
