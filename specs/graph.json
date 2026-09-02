@@ -1,0 +1,1103 @@
+{
+  "version": 1,
+  "state": "synced",
+  "product": {
+    "slug": "grill-me",
+    "requirement": "<!-- grill-bento-order-20260902.md -->\n\n# grill-me 合意メモ: アルムナイ弁当注文&集計ツール\n\n作成日: 2026-09-02\n\n## 結論\n\n### 価値の柱\n\nGoogleフォームに勝つ一点は、**チャンネルにpinされた1枚のメッセージが、注文が入るたびに書き換わり続けること**。\nスクロールするだけで「誰が何を頼んだか」「未払いは誰か」が全部見える。\nフォームは回答後に結果が見えないので、構造的にこれを真似できない。\n\n副の柱は集金の可視化。**「人にお金の催促をする」という幹事の一番嫌な仕事を、名指しの状態表示に置き換える**（通知は飛ばさない）。\n\n### 落としたもの\n\n- 締切後の変更・キャンセル対応（例外は考えない）\n- 数量（1人1個固定。`unique(event_id, discord_user_id)` で構造的に担保）\n- 幹事によるメニュー登録 → **注文がそのままメニューになる**\n- 締切時刻・日時パース・自動締切・cron・リマインド → **手動の [締め切る] ボタン1つ**\n- 権限チェック / `creator_id`（悪用されない前提。誰でも取り消せる・未払いに戻せる）\n- システムへのAI組み込み（AI活用＝AIを使って開発すること、と確認済み。**LLM APIを叩く箇所はゼロ**）\n- Webページ（デプロイするのは Worker 1本だけ）\n\n### 画面（これが製品のすべて）\n\n```\n注文フェーズ\n──────────────────────────────────────\n📌 9/15(月) お弁当\n📎 メニュー: https://tenpo.example.com/bento\n\n🍱 唐揚げ弁当  ¥650   ×3   gaku, taro, hana\n🍱 のり弁      ¥480   ×2   jiro, saki\n🍱 幕の内      ¥820   ×1   kenta\n──────────────────────────────────────\n弁当代 ¥4,310\n\n  [ 頼む ▼ ]  [ 新しく入力 ]  [ 取り消す ▼ ]  [ 締め切る ]\n```\n\n`[締め切る]` → Modal で「みんなで割る費用」を入力（改行区切り `配送料 500` / `API代 300`、空欄可）\n→ 金額確定 → `@here` で1回だけ通知 → 集金フェーズへ。\n\n```\n集金フェーズ\n──────────────────────────────────────\n📌 9/15(月) お弁当\n\n🍱 唐揚げ弁当  ¥650 + ¥84 = ¥734   ×3   gaku, taro, hana\n🍱 のり弁      ¥480 + ¥84 = ¥564   ×2   jiro, saki\n🍱 幕の内      ¥820 + ¥84 = ¥904   ×1   kenta\n──────────────────────────────────────\n弁当代 ¥4,310 ＋ 配送料 ¥500 = ¥4,810\n配送料は6人で均等割 → ¥84（端数切り上げ・余り¥4は幹事）\n\n💰 集金 4/6      未払い: jiro, saki       ← 通知は飛ばさない表示のみ\n送金先 → https://paypay.me/xxxx\n\n  [ 支払った ]  [ 未払いに戻す ▼ ]\n```\n\n**配送料は均等割だが、弁当の値段が違うので各自の支払額は全員バラバラ。**\n品ごとにグルーピングしているので、行に実額を出せば全員分カバーできる。暗算ゼロ。\n\n### ボタンの仕様\n\n| ボタン | 誰が | 動き |\n|---|---|---|\n| `[ 頼む ▼ ]` | 全員 | 既出の品が並ぶ。1タップ。**選択肢0件なら非表示** |\n| `[ 新しく入力 ]` | 全員 | Modal（品名 / 金額）。最初の1人と、珍しいものを頼む人だけ |\n| `[ 取り消す ▼ ]` | 全員 | 全員の注文が並ぶ。誰のでも消せる（打ち間違いの修正手段を兼ねる） |\n| `[ 締め切る ]` | 全員 | Modalが開く＝実質2段階確認なので誤爆しない |\n| `[ 支払った ]` | 本人 | PayPay送金は本人がその場で完了させる行為なので自己申告で足りる |\n| `[ 未払いに戻す ▼ ]` | 全員 | 齟齬の修正 |\n\n金額のバリデーションはしない。表に出ているので人間が気づく。\n上限を決め打つと、高い弁当や「2人分まとめて」が弾かれてそちらの害が大きい。\n\n## 技術選定: Cloudflare Workers + D1\n\nVercel + Supabase から変更した。理由は2つ。\n\n1. **Supabase Free は7日間アクセスが無いと休止する。** このBotは月1回動くかどうかなので、使いたい当日に落ちている可能性がある。keepalive の cron を持つのは、cron を消したこの設計と噛み合わない\n2. **Supabase の公開 Data API は、Discord の署名検証を迂回する裏口になる。** anon キーで直接テーブルを叩けば、注文の捏造も削除もできる。D1 は binding 経由でしか触れないので、この穴が構造的に存在しない\n\nWorker のコードは `src/index.ts` 1本、DB は `env.DB`。無料枠は 10万リクエスト/日。\n\n## スキーマ\n\nD1（中身は SQLite）。実体は `migrations/0001_init.sql`。\n\n```sql\ncreate table bento_events (\n  id           text primary key,\n  guild_id     text not null,\n  channel_id   text not null,\n  message_id   text,                     -- 集計メッセージ。edit の対象\n  title        text not null,\n  menu_url     text,\n  status       text not null default 'open' check (status in ('open', 'closed')),\n  shared_costs text not null default '[]',  -- JSON: [{\"label\":\"配送料\",\"amount\":500}]\n  created_at   text not null default (datetime('now'))\n);\n\ncreate table bento_orders (\n  id              text primary key,\n  event_id        text not null references bento_events(id) on delete cascade,\n  discord_user_id text not null,\n  display_name    text not null,\n  item_name       text not null,\n  price           integer not null,\n  paid            integer not null default 0,  -- SQLite に boolean は無い。0/1\n  created_at      text not null default (datetime('now')),\n  unique (event_id, discord_user_id)           -- 1人1個を構造で担保\n);\n\n-- 集計メッセージを描くたびに event_id で全件引くので必須\ncreate index idx_bento_orders_event on bento_orders (event_id);\n\ncreate table guild_settings (\n  guild_id   text primary key,\n  paypay_url text\n);\n```\n\n**メニュー用のテーブルは作らない。**\n選択肢は `select distinct item_name, price from bento_orders where event_id = ?` で出る。\nこれが「注文がメニューになる」の実体。\n\nSQLite なので Postgres の書き方は通らない。`uuid` / `boolean` / `jsonb` / `timestamptz` は無い。\nID は `crypto.randomUUID()` をアプリ側で作って `text` に入れる。真偽値は 0/1、JSON は文字列で持って読むとき `JSON.parse`。\n\n**RLS は書かない。書く相手がいない。**\nD1 には外向きの URL も API キーも無く、`wrangler.jsonc` の binding を持つ Worker から `env.DB` 経由でしか触れない。\n署名検証を通らないリクエストは、そもそも DB に到達する経路を持たない。\n\n## 技術メモ（実装時に踏む地雷）\n\n- **署名検証が必須**。Discord は Ed25519 で署名を送る。Workers ランタイムの `crypto.subtle` が Ed25519 に対応しているので**依存パッケージは足さない**\n- **生ボディが要る**。`await req.text()` してから検証 → その後 `JSON.parse`。先に `req.json()` すると検証できない\n- **3秒ルール**。Worker はコールドスタートが無いので単純な応答は余裕で間に合うが、D1 の読み書き＋Discord API への PATCH が挟まる操作は `type: 5`(deferred) を返し、`ctx.waitUntil()` で続きを回して元メッセージを PATCH する\n- **D1 はローカルとリモートが別物**。`npm run db:apply`（手元）と `npm run db:apply:remote`（本番）は両方打つ。手元で通ったから本番にテーブルがある、にはならない\n- **secret は `.dev.vars`（手元）と `wrangler secret put`（本番）**。`DISCORD_PUBLIC_KEY` / `DISCORD_BOT_TOKEN` の2つ。`wrangler.jsonc` の `vars` に書かない\n\n## 残った前提・未決事項\n\n- [ ] Discord Application の作成と Interactions Endpoint URL 設定（**先に `npm run deploy` しないと `*.workers.dev` の URL が確定しない**）\n- [ ] `guild_settings.paypay_url` の入れ方。`/bento-setup` を作るか、最初の `/bento` の Modal に混ぜるか\n- [ ] `display_name` の保存タイミング。Discordのニックネームは変わるので、注文時点の名前を焼き込む前提でよいか\n- [ ] 集計メッセージの pin を bot が自動でやるか、幹事に任せるか（botに `Manage Messages` 権限が必要）\n- [ ] 同じチャンネルで注文イベントが同時に2つ走った場合。破綻はしないが pin が2枚になって紛らわしい\n\n## 次のアクション\n\n1. `npm run db:create` → 出た `database_id` を `wrangler.jsonc` に貼る → `npm run deploy` で URL を確定させる\n2. Discord Application を作り、Interactions Endpoint URL を設定 → **PING応答だけ実装して検証を通す**（`src/index.ts` に実装済み。`node --test test/interaction.test.mjs` で手元検証できる）\n3. マイグレーション3テーブル → `npm run db:apply` → `npm run db:apply:remote`\n4. `/bento` → Modal → 集計メッセージ投稿までを一直線に通す\n5. `[新しく入力]` → `[頼む ▼]` の順に注文導線\n6. `[締め切る]` → 割り勘計算 → 集金モード\n7. `[支払った]` / `[取り消す ▼]` / `[未払いに戻す ▼]`\n\n**2番が最大の関門**（署名検証・生ボディ・3秒）。ここを最初に単独で通すこと。\n\n---\n\n<!-- docs/bento-design.html -->\n\n<meta charset=\"utf-8\">\n<title>お弁当注文Bot</title>\n<style>\n/* html-report-design 準拠。構造は余白と文字の階層で作る。線と箱で作らない */\n:root{\n  --ink:#1a1a1a; --ink-2:#555555; --ink-3:#8e8e8e;\n  --accent:#173f66; --accent-tint:#eef3f8;\n  --hairline:#d9d9d9; --fill-gray:#e7e9ec; --paper:#ffffff;\n  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,\"Hiragino Kaku Gothic ProN\",\"Yu Gothic\",monospace;\n}\nhtml{color-scheme:light}\nbody{\n  margin:0;background:var(--paper);color:var(--ink);\n  font-family:\"Helvetica Neue\",Arial,\"Hiragino Kaku Gothic ProN\",\"Hiragino Sans\",\"Yu Gothic Medium\",\"Yu Gothic\",Meiryo,sans-serif;\n  font-size:15px;line-height:1.9;border-top:6px solid var(--accent);\n  -webkit-font-smoothing:antialiased;\n}\n.page{max-width:780px;margin:0 auto;padding:56px clamp(20px,6vw,48px) 96px}\n\n.doc-header{padding-bottom:28px;border-bottom:1px solid var(--ink)}\n.eyebrow{font-size:11px;letter-spacing:.16em;color:var(--ink-3);text-transform:uppercase;margin:0 0 20px}\nh1{font-size:27px;line-height:1.5;letter-spacing:.02em;margin:0 0 12px;font-feature-settings:\"palt\" 1;text-wrap:balance}\n.lead{font-size:14px;color:var(--ink-2);margin:0 0 24px;max-width:38em}\n.doc-meta{font-size:12px;color:var(--ink-3);display:flex;gap:24px;flex-wrap:wrap}\n\n.page>section{border-top:1px solid var(--hairline);padding-top:44px;margin-top:64px}\n.page>section:first-of-type{border-top:0;padding-top:0;margin-top:56px}\nh2{font-size:19px;letter-spacing:.03em;margin:0;font-feature-settings:\"palt\" 1}\nh2 .no{color:var(--accent);margin-right:14px;font-variant-numeric:tabular-nums}\n.msg{font-size:16px;font-weight:600;line-height:1.8;margin:18px 0 24px;max-width:36em}\nh3{font-size:15px;margin:36px 0 8px}\np{margin:0 0 16px;max-width:42em}\nstrong{font-weight:700}\n\nul,ol{margin:0 0 16px;padding-left:1.4em;max-width:41em}\nli{margin-bottom:6px}\nul{list-style:none;padding-left:1.2em}\nul li::before{content:\"–\";float:left;margin-left:-1.2em;color:var(--ink-3)}\n\n.summary{list-style:none;margin:24px 0 0;padding:0;counter-reset:s;max-width:44em}\n.summary li{counter-increment:s;position:relative;padding-left:2.4em;margin-bottom:14px}\n.summary li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.4em;\n  font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em;font-variant-numeric:tabular-nums}\n.summary li::marker{content:none}\n\n.tbl{overflow-x:auto}\ntable{width:100%;border-collapse:collapse;margin:28px 0 8px;font-size:13px;line-height:1.7}\ncaption{text-align:left;font-size:12.5px;font-weight:600;margin-bottom:10px}\nth{font-size:12px;font-weight:600;text-align:left;padding:10px 12px;\n  border-top:2px solid var(--ink);border-bottom:1px solid var(--ink);vertical-align:bottom}\ntd{padding:10px 12px;border-bottom:1px solid var(--hairline);vertical-align:top}\nth.num,td.num{text-align:right;font-variant-numeric:tabular-nums}\ntr.total td{border-top:1px solid var(--ink);border-bottom:2px solid var(--ink);\n  font-weight:600;background:var(--accent-tint)}\n\nfigure{margin:32px 0 8px}\nfigcaption{font-size:12.5px;font-weight:600;margin-bottom:14px}\nfigure svg{width:100%;height:auto;display:block}\nsvg text{font-family:inherit}\n.fig-scroll{overflow-x:auto}\n.src{font-size:11.5px;color:var(--ink-3);margin:6px 0 0}\n.note{font-size:12.5px;color:var(--ink-2);border-left:2px solid var(--accent);\n  padding:2px 0 2px 14px;margin:24px 0 16px;max-width:40em}\n\n/* Discord のメッセージ再現。ここだけは面を持たせる（実物のUIだから） */\n.mock{font-family:var(--mono);font-size:12px;line-height:1.85;white-space:pre;\n  background:var(--accent-tint);padding:18px 20px;margin:24px 0 8px;overflow-x:auto;\n  border-left:3px solid var(--accent)}\n.mock b{font-weight:700;color:var(--accent)}\ncode{font-family:var(--mono);font-size:.88em;background:var(--fill-gray);padding:1px 5px}\npre{font-family:var(--mono);font-size:12px;line-height:1.75;background:var(--fill-gray);\n  padding:16px 18px;margin:20px 0 8px;overflow-x:auto}\npre code{background:none;padding:0;font-size:inherit}\n\n.chevrons{display:flex;margin:28px 0 8px;min-width:600px}\n.chev{flex:1;padding:10px 10px 10px 22px;font-size:12px;font-weight:600;line-height:1.5;\n  text-align:center;background:var(--fill-gray);margin-left:4px;\n  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%,12px 50%)}\n.chev:first-child{margin-left:0;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%)}\n.chev.on{background:var(--accent);color:#fff}\n.chev small{display:block;font-size:10.5px;font-weight:500;opacity:.8}\n\ndl.glossary{margin:24px 0 8px;max-width:44em}\ndl.glossary dt{font-weight:700;font-size:13.5px;margin-top:18px}\ndl.glossary dd{margin:2px 0 0;font-size:13.5px;color:var(--ink-2);line-height:1.8}\n\n@media print{body{border-top-width:4px}.page{padding-top:32px}}\n</style>\n\n<div class=\"page\">\n\n<header class=\"doc-header\">\n  <p class=\"eyebrow\">Alumni Mini Hackathon / 設計資料</p>\n  <h1>お弁当注文Bot ― Discord だけで完結する注文と集金</h1>\n  <p class=\"lead\">アルムナイの弁当注文を、Webサイトを一切開かずに Discord のメッセージ1枚で完結させる。この資料は「何を作るか」と「なぜその形なのか」を、Discord Bot を書いたことがない人にも分かるようにまとめたもの。</p>\n  <div class=\"doc-meta\">\n    <span>2026-09-02</span>\n    <span>Cloudflare Workers / D1</span>\n    <span>認証なし・ストレージなし・無料枠</span>\n  </div>\n</header>\n\n<section>\n  <h2><span class=\"no\">00</span>この資料の結論</h2>\n  <ol class=\"summary\">\n    <li><strong>作るのは「1枚の生きたメッセージ」。</strong> Discord のチャンネルに貼られたメッセージが、注文が入るたびに自動で書き換わる。誰も Web サイトを開かない。ログインもしない。</li>\n    <li><strong>Googleフォームに勝てるのはこの一点だけ。</strong> フォームは回答したあと結果が見えない。この Bot は、スクロールしただけで「誰が何を頼んだか」「誰がまだ払っていないか」が全員に見える。</li>\n    <li><strong>作らないものを、作るものと同じだけ決めた。</strong> 認証・Webページ・メニュー登録・締切の自動判定・権限管理・AI。全部いらないと結論した。残ったのは Discord からの通信を受ける API 1本と、テーブル3つ。</li>\n  </ol>\n  <p class=\"note\">この資料は設計の合意事項をまとめたもの。実装手順の詳細は同リポジトリの <code>grill-bento-order-20260902.md</code> に置いてある。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">01</span>完成形</h2>\n  <p class=\"msg\">製品のすべてが、この1枚のメッセージに収まっている。画面遷移も、ログイン画面も、マイページも存在しない。</p>\n\n  <p>幹事が <code>/bento</code> と打つと、チャンネルにこのメッセージが投稿される。あとは全員がボタンを押すだけ。</p>\n\n<div class=\"mock\"><b>📌 9/15(月) お弁当</b>\n📎 メニュー: https://tenpo.example.com/bento\n\n🍱 唐揚げ弁当  ¥650   ×3   gaku, taro, hana\n🍱 のり弁      ¥480   ×2   jiro, saki\n🍱 幕の内      ¥820   ×1   kenta\n────────────────────────────────\n弁当代 ¥4,310\n\n [ 頼む ▼ ]  [ 新しく入力 ]  [ 取り消す ▼ ]  [ 締め切る ]</div>\n  <p class=\"src\">図1: 注文フェーズの集計メッセージ。誰かが注文するたびに Bot がこのメッセージ自体を書き換える（新しいメッセージを投稿するのではない）。</p>\n\n  <p>幹事が <code>[ 締め切る ]</code> を押すと、配送料を入力する小さな入力欄が開く。そこで金額が確定し、メッセージが集金モードに切り替わる。</p>\n\n<div class=\"mock\"><b>📌 9/15(月) お弁当</b>\n\n🍱 唐揚げ弁当  ¥650 + ¥84 = <b>¥734</b>   ×3   gaku, taro, hana\n🍱 のり弁      ¥480 + ¥84 = <b>¥564</b>   ×2   jiro, saki\n🍱 幕の内      ¥820 + ¥84 = <b>¥904</b>   ×1   kenta\n────────────────────────────────\n弁当代 ¥4,310 ＋ 配送料 ¥500 = ¥4,810\n配送料は6人で均等割 → ¥84（端数切り上げ・余り¥4は幹事）\n\n💰 集金 4/6      未払い: jiro, saki\n送金先 → https://paypay.me/xxxx\n\n [ 支払った ]  [ 未払いに戻す ▼ ]</div>\n  <p class=\"src\">図2: 集金フェーズ。<strong>配送料は均等割だが、弁当の値段が違うので各自の支払額は全員バラバラ。</strong>だから行ごとに実際に送る金額を書く。暗算させない。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">02</span>なぜ Googleフォームではないのか</h2>\n  <p class=\"msg\">同じ機能はフォームで15分で作れる。だから「フォームに構造的にできないこと」を1つ選んで、そこに全部を賭けた。</p>\n\n  <p>弁当の幹事が実際に面倒なのは、次の4つ。</p>\n\n  <div class=\"tbl\">\n  <table>\n    <caption>表1: 幹事の手間と、フォームで解けるかどうか</caption>\n    <thead><tr><th style=\"width:34%\">面倒なこと</th><th style=\"width:22%\">フォームで解けるか</th><th>この Bot はどうするか</th></tr></thead>\n    <tbody>\n      <tr><td>注文の取りまとめ<br>（「私A弁当」がチャットに散らばる）</td><td>解ける</td><td>同じく解ける（差はつかない）</td></tr>\n      <tr><td>店に出す最終オーダー<br>（「A弁当7個、B弁当3個」の形にする）</td><td>半分。スプレッドシートで手集計</td><td>常に集計済みの状態で表示されている</td></tr>\n      <tr><td>集金の追い込み<br>（未払いを一人ずつ追いかける）</td><td><strong>解けない</strong></td><td><strong>未払いが全員に見えている</strong></td></tr>\n      <tr><td>結果を全員に見せる</td><td><strong>解けない</strong>（回答後は自分の分すら見えない）</td><td><strong>チャンネルを見れば常に最新</strong></td></tr>\n    </tbody>\n  </table>\n  </div>\n\n  <p>勝ち筋は下2つ。とくに「未払いが全員に見えている」は、<strong>幹事が一番やりたくない仕事（人にお金の催促をする）を、機械の状態表示に置き換える</strong>という意味を持つ。ここがこの道具の存在理由。</p>\n\n  <p class=\"note\">ただし、未払い者に <code>@メンション</code> で通知は飛ばさない。通知を飛ばすと「取り立て」になって角が立つ。<strong>見れば分かるが、鳴らない。</strong>この強度が最適だと判断した。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">03</span>ログインしないのに、なぜ「誰が」が分かるのか</h2>\n  <p class=\"msg\">Discord が本人確認を代行してくれている。だから認証を自分で作る必要がない。</p>\n\n  <p>ここが初めて Discord Bot を作る人が一番不思議に思うところなので、先に説明する。</p>\n\n  <p>誰かが Discord でボタンを押すと、Discord のサーバーから自分のサーバー（Cloudflare Workers）に <strong>HTTPリクエストが飛んでくる</strong>。その中身には、押した人の Discord ユーザーID と表示名が最初から入っている。</p>\n\n<pre><code>{\n  \"type\": 3,\n  \"member\": {\n    \"user\": { \"id\": \"123456789012345678\", \"username\": \"gaku\" }\n  },\n  \"data\": { \"custom_id\": \"order_select\", \"values\": [\"唐揚げ弁当\"] }\n}</code></pre>\n\n  <p>しかもこのリクエストには <strong>Discord の電子署名がついている</strong>。署名を検証すれば「本当に Discord から来たリクエストだ」と確認できるので、他人がユーザーIDを詐称して直接 API を叩くことはできない。</p>\n\n  <p><strong>つまり、ログイン画面もパスワードもセッションも作らずに、本人確認が完了している。</strong>「認証基盤なし」という制約は、この設計では制約ではなく前提条件になっている。</p>\n\n  <p class=\"note\">むしろ「名前を手で入力してもらう」設計にすると、表記ゆれ（gaku / Gaku / がく）が起きて劣化する。Discord のユーザーIDは絶対に一意で、絶対に詐称できない。使わない手はない。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">04</span>全体の仕組み</h2>\n  <p class=\"msg\">動くのは「Discordからリクエストが飛んできた瞬間」だけ。常時動きつづけるサーバーは要らない。</p>\n\n  <figure>\n    <figcaption>図3: ボタンが押されてからメッセージが書き換わるまで</figcaption>\n    <div class=\"fig-scroll\">\n    <svg viewBox=\"0 0 720 268\" role=\"img\" aria-label=\"参加者のボタン操作がDiscordを経由してCloudflare Workersに届き、D1を読み書きしてDiscordのメッセージを書き換えるまでの流れ\">\n      <g font-size=\"12\">\n        <!-- boxes -->\n        <rect x=\"8\" y=\"56\" width=\"136\" height=\"72\" fill=\"#e7e9ec\"/>\n        <text x=\"76\" y=\"86\" text-anchor=\"middle\" font-weight=\"700\" fill=\"#1a1a1a\">参加者</text>\n        <text x=\"76\" y=\"106\" text-anchor=\"middle\" font-size=\"11\" fill=\"#555555\">Discordアプリ</text>\n\n        <rect x=\"200\" y=\"56\" width=\"136\" height=\"72\" fill=\"#e7e9ec\"/>\n        <text x=\"268\" y=\"86\" text-anchor=\"middle\" font-weight=\"700\" fill=\"#1a1a1a\">Discord</text>\n        <text x=\"268\" y=\"106\" text-anchor=\"middle\" font-size=\"11\" fill=\"#555555\">署名をつけて転送</text>\n\n        <rect x=\"392\" y=\"56\" width=\"136\" height=\"72\" fill=\"#173f66\"/>\n        <text x=\"460\" y=\"86\" text-anchor=\"middle\" font-weight=\"700\" fill=\"#ffffff\">Cloudflare</text>\n        <text x=\"460\" y=\"106\" text-anchor=\"middle\" font-size=\"11\" fill=\"#ffffff\" opacity=\"0.85\">Workers（POST /）</text>\n\n        <rect x=\"584\" y=\"56\" width=\"136\" height=\"72\" fill=\"#e7e9ec\"/>\n        <text x=\"652\" y=\"86\" text-anchor=\"middle\" font-weight=\"700\" fill=\"#1a1a1a\">D1</text>\n        <text x=\"652\" y=\"106\" text-anchor=\"middle\" font-size=\"11\" fill=\"#555555\">SQLite</text>\n\n        <!-- forward arrows -->\n        <line x1=\"144\" y1=\"92\" x2=\"192\" y2=\"92\" stroke=\"#173f66\" stroke-width=\"1.5\"/>\n        <path d=\"M192 92 L184 88 L184 96 Z\" fill=\"#173f66\"/>\n        <text x=\"168\" y=\"44\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">ボタンを押す</text>\n\n        <line x1=\"336\" y1=\"92\" x2=\"384\" y2=\"92\" stroke=\"#173f66\" stroke-width=\"1.5\"/>\n        <path d=\"M384 92 L376 88 L376 96 Z\" fill=\"#173f66\"/>\n        <text x=\"360\" y=\"36\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">誰が押したか</text>\n        <text x=\"360\" y=\"48\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">＋署名</text>\n\n        <line x1=\"528\" y1=\"92\" x2=\"576\" y2=\"92\" stroke=\"#173f66\" stroke-width=\"1.5\"/>\n        <path d=\"M576 92 L568 88 L568 96 Z\" fill=\"#173f66\"/>\n        <text x=\"552\" y=\"36\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">注文を保存</text>\n        <text x=\"552\" y=\"48\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">全注文を読む</text>\n\n        <!-- return path -->\n        <path d=\"M460 128 L460 176 L268 176 L268 132\" fill=\"none\" stroke=\"#173f66\" stroke-width=\"1.5\" stroke-dasharray=\"4 4\"/>\n        <path d=\"M268 128 L264 136 L272 136 Z\" fill=\"#173f66\"/>\n        <text x=\"364\" y=\"196\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">集計しなおしたメッセージで上書きする</text>\n\n        <path d=\"M200 176 L76 176 L76 132\" fill=\"none\" stroke=\"#173f66\" stroke-width=\"1.5\" stroke-dasharray=\"4 4\"/>\n        <path d=\"M76 128 L72 136 L80 136 Z\" fill=\"#173f66\"/>\n        <text x=\"76\" y=\"220\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">全員の画面で</text>\n        <text x=\"76\" y=\"236\" text-anchor=\"middle\" font-size=\"10.5\" fill=\"#555555\">同じ1枚が更新される</text>\n      </g>\n    </svg>\n    </div>\n    <p class=\"src\">Worker が動くのは、リクエストが飛んできた数百ミリ秒だけ。しかも D1 は Worker から直接つながっていて、外に口がない。</p>\n  </figure>\n\n  <p>デプロイするのは <code>src/index.ts</code> <strong>ただ1ファイル</strong>の Worker。ブラウザで開く画面は作らない。ルーティングも要らないので、フレームワークも入れない。</p>\n\n  <p><strong>データベースが外から見えないことが、この構成の一番効いている点。</strong>D1 には URL も API キーも無く、<code>wrangler.jsonc</code> で紐づけた Worker から <code>env.DB</code> 経由でしか触れない。つまり<strong>署名検証を通らないリクエストは、そもそもデータベースに到達する経路を持たない</strong>。公開 API を持つデータベースだと、この「署名を迂回されない」を設定で守り続ける必要がある。</p>\n\n  <p class=\"note\"><strong>初学者がハマる3点。</strong>（1）Discord は3秒以内に返事がないとタイムアウトするので、まず「考え中」を即返してから処理する。（2）署名検証には加工前の生の本文が要るので、<code>req.json()</code> より先に <code>req.text()</code> を呼ぶ。（3）D1 はローカル（<code>--local</code>）とリモート（<code>--remote</code>）で中身が別物。手元で通ったからといって本番のテーブルはできていない。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">05</span>使う流れ</h2>\n  <p class=\"msg\">スラッシュコマンドを打つのは幹事だけ。参加者は最初から最後までボタンしか押さない。</p>\n\n  <div class=\"fig-scroll\">\n  <div class=\"chevrons\">\n    <div class=\"chev\">募集<small>幹事が /bento</small></div>\n    <div class=\"chev on\">注文<small>全員がボタン</small></div>\n    <div class=\"chev\">締切<small>幹事が [締め切る]</small></div>\n    <div class=\"chev on\">集金<small>各自が [支払った]</small></div>\n    <div class=\"chev\">完了<small>未払い 0 人</small></div>\n  </div>\n  </div>\n  <p class=\"src\">図4: 5つのフェーズ。太い2つが参加者が触るところ。</p>\n\n  <div class=\"tbl\">\n  <table>\n    <caption>表2: ボタンの一覧と権限</caption>\n    <thead><tr><th style=\"width:24%\">ボタン</th><th style=\"width:14%\">押せる人</th><th>動き</th></tr></thead>\n    <tbody>\n      <tr><td><code>[ 頼む ▼ ]</code></td><td>全員</td><td>すでに誰かが注文した品が並ぶ。1タップで同じものを注文。<strong>選択肢が0件のときは表示しない</strong></td></tr>\n      <tr><td><code>[ 新しく入力 ]</code></td><td>全員</td><td>品名と金額を入力する小窓が開く。最初の1人と、珍しいものを頼む人だけが使う</td></tr>\n      <tr><td><code>[ 取り消す ▼ ]</code></td><td>全員</td><td>全員の注文が並び、誰のでも消せる。金額の打ち間違いを直す手段も兼ねる</td></tr>\n      <tr><td><code>[ 締め切る ]</code></td><td>全員</td><td>配送料を入力する小窓が開く。<strong>小窓が開くこと自体が確認ステップになる</strong>ので誤爆しない</td></tr>\n      <tr><td><code>[ 支払った ]</code></td><td>本人</td><td>PayPay送金は本人がその場で完了させる行為なので、自己申告で信用できる</td></tr>\n      <tr><td><code>[ 未払いに戻す ▼ ]</code></td><td>全員</td><td>間違えて押した場合の戻し</td></tr>\n    </tbody>\n  </table>\n  </div>\n\n  <p><strong>権限チェックのコードは1行も書かない。</strong>アルムナイの内輪で悪用される想定がないので、誰が誰の注文を消せてもいい。この判断ひとつで「幹事とは誰か」を管理する仕組みが丸ごと不要になった。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">06</span>メニューを登録しないという判断</h2>\n  <p class=\"msg\">幹事にメニューを入力させない。注文が積み上がると、選択肢が勝手に増えていく。</p>\n\n  <p>頼む店は毎回違う。だから幹事に毎回メニューを打ち込ませると、2回目で道具が捨てられる。かといって全員が自由テキストで書くと「唐揚げ弁当 / からあげ弁当 / 唐揚げ」が混ざって、店に出す発注が作れない。</p>\n\n  <p>解決策は、<strong>誰かが入力した品が、そのまま次の人の選択肢になる</strong>こと。</p>\n\n<div class=\"mock\"><b>19:00</b>  幹事が /bento を叩いた直後\n        まだ注文がありません\n        [ 新しく入力 ]              ← 選択肢が空なので「頼む ▼」は出ない\n\n<b>19:05</b>  gaku が [新しく入力] → 「唐揚げ弁当 / 650」\n        🍱 唐揚げ弁当 ¥650  ×1  gaku\n        [ 頼む ▼ ] ← <b>唐揚げ弁当 ¥650 が選択肢として生まれた</b>\n        [ 新しく入力 ]\n\n<b>19:07</b>  taro も唐揚げ弁当。[頼む ▼] を開くともう入っている\n        🍱 唐揚げ弁当 ¥650  ×2  gaku, taro\n                                <b>taro は一文字も打っていない</b>\n\n<b>19:10</b>  hana はのり弁。まだ無いので [新しく入力]\n        🍱 唐揚げ弁当 ¥650  ×2  gaku, taro\n        🍱 のり弁     ¥480  ×1  hana\n        [ 頼む ▼ ] ← 選択肢が2つになった</div>\n  <p class=\"src\">図5: 6人なら手入力は2〜3回。残りは全部タップで終わる。</p>\n\n  <p>表記ゆれが起きない理由は単純で、<strong>打つより押すほうが明らかに楽だから</strong>。すでにある品をわざわざ打ち直す人はいない。名寄せ処理も入力検証もAIも要らない。</p>\n\n  <p>データベース側でも、<strong>メニュー用のテーブルを作らない</strong>。選択肢は注文テーブルから重複を除いて取り出すだけ。</p>\n\n<pre><code>select distinct item_name, price\nfrom bento_orders\nwhere event_id = $1;</code></pre>\n</section>\n\n<section>\n  <h2><span class=\"no\">07</span>お金の計算</h2>\n  <p class=\"msg\">配送料は全員で均等に割る。ただし弁当の値段が違うので、各自が送る金額は全員バラバラになる。</p>\n\n  <div class=\"tbl\">\n  <table>\n    <caption>表3: 6人・配送料¥500 の場合の計算（¥500 ÷ 6人 = ¥83.33 → 切り上げて ¥84）</caption>\n    <thead><tr><th style=\"width:26%\">品</th><th class=\"num\" style=\"width:14%\">弁当代</th><th class=\"num\" style=\"width:14%\">配送料の割前</th><th class=\"num\" style=\"width:16%\">送る金額</th><th class=\"num\">人数</th></tr></thead>\n    <tbody>\n      <tr><td>唐揚げ弁当</td><td class=\"num\">¥650</td><td class=\"num\">+¥84</td><td class=\"num\"><strong>¥734</strong></td><td class=\"num\">3</td></tr>\n      <tr><td>のり弁</td><td class=\"num\">¥480</td><td class=\"num\">+¥84</td><td class=\"num\"><strong>¥564</strong></td><td class=\"num\">2</td></tr>\n      <tr><td>幕の内</td><td class=\"num\">¥820</td><td class=\"num\">+¥84</td><td class=\"num\"><strong>¥904</strong></td><td class=\"num\">1</td></tr>\n      <tr class=\"total\"><td>合計</td><td class=\"num\">¥4,310</td><td class=\"num\">+¥504</td><td class=\"num\">¥4,814</td><td class=\"num\">6</td></tr>\n    </tbody>\n  </table>\n  </div>\n\n  <p>決めたルールは3つ。</p>\n  <ul>\n    <li><strong>均等割にする（弁当代に比例させない）。</strong>配送は個数ではなく1回の配達に対してかかる費用なので、人数で割るのが自然</li>\n    <li><strong>端数は切り上げる。</strong>¥83.33 を切り捨てると集金が足りなくなって幹事が持ち出しになる。切り上げれば ¥4 余るだけで済む（余りは幹事の取り分）</li>\n    <li><strong>金額の入力チェックはしない。</strong>¥820 を ¥8,200 と打っても、集計メッセージに大きく出るので人間が必ず気づく。上限を決め打つと、高い弁当や2人分まとめる場合が弾かれてそちらの害が大きい</li>\n  </ul>\n\n  <p class=\"note\">この「みんなで割る費用」の欄は配送料専用ではなく、複数行で <code>配送料 500</code> <code>API代 300</code> のように何個でも入れられる。均等割のロジックは同じものを使い回せるので、実装は増えない。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">08</span>データの持ち方</h2>\n  <p class=\"msg\">テーブルは3つだけ。1人1個という仕様を、アプリのコードではなくデータベースの制約で保証する。</p>\n\n<pre><code>create table bento_events (\n  id           text primary key,\n  guild_id     text not null,\n  channel_id   text not null,\n  message_id   text,                     -- 書き換える対象のメッセージ\n  title        text not null,\n  menu_url     text,\n  status       text not null default 'open' check (status in ('open', 'closed')),\n  shared_costs text not null default '[]',  -- JSON: [{\"label\":\"配送料\",\"amount\":500}]\n  created_at   text not null default (datetime('now'))\n);\n\ncreate table bento_orders (\n  id              text primary key,\n  event_id        text not null references bento_events(id) on delete cascade,\n  discord_user_id text not null,\n  display_name    text not null,\n  item_name       text not null,\n  price           integer not null,\n  paid            integer not null default 0,  -- SQLite に boolean は無い。0/1\n  created_at      text not null default (datetime('now')),\n  unique (event_id, discord_user_id)           -- ← 1人1個をここで担保する\n);\n\ncreate index idx_bento_orders_event on bento_orders (event_id);\n\ncreate table guild_settings (\n  guild_id   text primary key,\n  paypay_url text\n);</code></pre>\n\n  <p class=\"note\"><strong>D1 の中身は SQLite なので、PostgreSQL の書き方はそのまま通らない。</strong>型は少なく、<code>uuid</code> も <code>boolean</code> も <code>jsonb</code> も無い。ID は <code>crypto.randomUUID()</code> でアプリ側が作って <code>text</code> に入れ、真偽値は <code>0</code> / <code>1</code>、JSON は文字列で持って読むときに <code>JSON.parse</code> する。日時も文字列。</p>\n\n  <p>最後の <code>unique (event_id, discord_user_id)</code> が効いている。同じ人が2回注文しようとすると<strong>データベースが拒否する</strong>ので、「すでに注文済みかどうか」を毎回コードで確認する必要がない。二重注文というバグが構造的に起きなくなる。</p>\n\n  <p><code>message_id</code> は、書き換える対象のメッセージを覚えておくためのもの。これがないと、次に誰かが注文したときにどのメッセージを更新すればいいか分からなくなる。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">09</span>作らないと決めたもの</h2>\n  <p class=\"msg\">短い期間で仕上げるために削ったのではなく、あったほうが悪くなるから削った。</p>\n\n  <div class=\"tbl\">\n  <table>\n    <caption>表4: 検討して落とした機能と、その理由</caption>\n    <thead><tr><th style=\"width:30%\">落としたもの</th><th>理由</th></tr></thead>\n    <tbody>\n      <tr><td>ログイン・認証</td><td>Discord が本人確認を済ませてくれている（→ 03）</td></tr>\n      <tr><td>Webページ</td><td>開かせた時点で「Discordで完結」が崩れる。デプロイするのは Worker 1本だけ</td></tr>\n      <tr><td>数量（1人で2個）</td><td>アルムナイの弁当では起きない。入れると入力欄・検算・割り勘の計算が全部増える</td></tr>\n      <tr><td>締切時刻の自動判定</td><td>幹事が「締め切っていい？」と聞いて締めるので、機械が時刻を知る必要がない。日時のパース（「明日の21時」をどう読むか）という事故りやすい処理が丸ごと消えた</td></tr>\n      <tr><td>定期実行（cron）とリマインド</td><td>締切を手動にしたので不要。Cron Triggers も時刻パースも書かずに済んだ</td></tr>\n      <tr><td>締切後の変更・キャンセル</td><td>例外は扱わない。締め切ったらボタンが切り替わるだけ</td></tr>\n      <tr><td>権限管理・幹事という概念</td><td>内輪で悪用されない前提。権限チェックのコードがゼロになった</td></tr>\n      <tr><td>メニュー登録機能</td><td>注文がそのままメニューになる（→ 06）</td></tr>\n      <tr><td>AI / LLM の組み込み</td><td>この課題の「AI活用」は<strong>AIを使って開発すること</strong>を指す。動くシステムの中で LLM を呼ぶ場所はない</td></tr>\n    </tbody>\n  </table>\n  </div>\n</section>\n\n<section>\n  <h2><span class=\"no\">10</span>用語</h2>\n  <dl class=\"glossary\">\n    <dt>スラッシュコマンド</dt>\n    <dd>Discord のメッセージ欄で <code>/</code> から始めて呼び出すコマンド。この Bot では幹事が使う <code>/bento</code> だけ。</dd>\n\n    <dt>インタラクション (Interaction)</dt>\n    <dd>ユーザーがコマンドを打ったりボタンを押したりしたときに、Discord から自分のサーバーへ飛んでくる HTTPリクエストのこと。この Bot が受け取るのはこれだけ。</dd>\n\n    <dt>Interactions Endpoint URL</dt>\n    <dd>そのリクエストの届け先として Discord 側に登録する URL。ここでは <code>https://bento.&lt;自分の名前&gt;.workers.dev/</code>。<strong>登録時に Discord が疎通確認をしてくるので、署名検証を実装するまで登録できない。</strong></dd>\n\n    <dt>モーダル (Modal)</dt>\n    <dd>ボタンを押すと開く入力用の小窓。テキスト欄が最大5つまで置ける（日付を選ぶカレンダーのような部品は存在しない）。この Bot では「品名と金額」「配送料」の入力に使う。</dd>\n\n    <dt>セレクトメニュー (Select Menu)</dt>\n    <dd>プルダウンで選ぶ部品。選択肢は25件まで。<code>[ 頼む ▼ ]</code> がこれ。</dd>\n\n    <dt>Embed</dt>\n    <dd>Discord のメッセージをきれいに整形して表示するための構造。図1・図2の見た目はこれで作る。</dd>\n\n    <dt>Ed25519 署名</dt>\n    <dd>Discord が「このリクエストは確かに Discord が送った」ことを証明するためにつける電子署名。Workers のランタイムに入っている <code>crypto.subtle</code> が Ed25519 に対応しているので、追加のライブラリは要らない。</dd>\n\n    <dt>Worker</dt>\n    <dd>Cloudflare 上で動く、リクエストが来たときだけ起動する関数。<code>src/index.ts</code> に <code>fetch</code> を書くだけ。サーバーの常時起動も、待機中の課金も無い。</dd>\n\n    <dt>D1</dt>\n    <dd>Cloudflare の SQLite データベース。<strong>外向きの URL も API キーも無く、<code>wrangler.jsonc</code> で紐づけた Worker から <code>env.DB</code> 経由でしか触れない。</strong>この「外から触れない」が、そのままセキュリティ設計になっている。</dd>\n\n    <dt>バインディング (binding)</dt>\n    <dd>Worker に D1 などの資源を結びつける設定。<code>wrangler.jsonc</code> に書くと、コードから <code>env.DB</code> という名前で使えるようになる。接続文字列やパスワードを環境変数に置く必要がない。</dd>\n  </dl>\n</section>\n\n<section>\n  <h2><span class=\"no\">11</span>作る順番</h2>\n  <p class=\"msg\">最初の関門は step 2。ここが通らないと Bot は1ミリも動かないので、他に何も足さずにここだけ通す。</p>\n\n  <div class=\"tbl\">\n  <table>\n    <caption>表5: 実装の順序と完了条件</caption>\n    <thead><tr><th style=\"width:6%\">#</th><th style=\"width:38%\">やること</th><th>できたと言える状態</th></tr></thead>\n    <tbody>\n      <tr><td class=\"num\">1</td><td><code>npm run db:create</code> → <code>npm run deploy</code> で空のまま Worker を出す</td><td><code>*.workers.dev</code> の URL が確定する（この URL がないと 2 に進めない）</td></tr>\n      <tr><td class=\"num\">2</td><td><strong>Discord Application を作り、署名検証と PING 応答だけ実装</strong></td><td>Discord の管理画面で Interactions Endpoint URL の保存が成功する</td></tr>\n      <tr><td class=\"num\">3</td><td>テーブル3つのマイグレーション</td><td><code>npm run db:apply</code>（手元）と <code>npm run db:apply:remote</code>（本番）が両方通る</td></tr>\n      <tr><td class=\"num\">4</td><td><code>/bento</code> → モーダル → 集計メッセージ投稿</td><td>チャンネルに空の集計メッセージが出る</td></tr>\n      <tr><td class=\"num\">5</td><td><code>[ 新しく入力 ]</code> → <code>[ 頼む ▼ ]</code> の順に注文導線</td><td>2人目が1タップで同じ品を頼める</td></tr>\n      <tr><td class=\"num\">6</td><td><code>[ 締め切る ]</code> → 割り勘計算 → 集金モード</td><td>各行に「送る金額」が出る</td></tr>\n      <tr><td class=\"num\">7</td><td><code>[ 支払った ]</code> / <code>[ 取り消す ▼ ]</code> / <code>[ 未払いに戻す ▼ ]</code></td><td>未払いが 0 人になる</td></tr>\n    </tbody>\n  </table>\n  </div>\n\n  <p class=\"note\">step 2 でつまずく原因はほぼ3つに絞られる。<strong>(1)</strong> <code>req.json()</code> を先に呼んでしまい生の本文が取れない。<strong>(2)</strong> 環境変数の公開鍵（Public Key）を Bot Token と取り違えている。<strong>(3)</strong> <code>type: 1</code> の PING に <code>{\"type\": 1}</code> を返していない。</p>\n</section>\n\n<section>\n  <h2><span class=\"no\">12</span>決めてほしいこと</h2>\n  <p class=\"msg\">設計は固まっている。残りは実装しながらでも決められるが、早いほうがいい。</p>\n\n  <div class=\"tbl\">\n  <table>\n    <caption>表6: 未決事項</caption>\n    <thead><tr><th style=\"width:34%\">論点</th><th style=\"width:22%\">いつまでに</th><th>補足</th></tr></thead>\n    <tbody>\n      <tr><td>PayPay リンクの登録方法</td><td>step 4 まで</td><td><code>/bento-setup</code> を別に作るか、最初の <code>/bento</code> のモーダルに混ぜるか。どちらでも軽い</td></tr>\n      <tr><td>表示名をいつ保存するか</td><td>step 5 まで</td><td>Discord のニックネームは変わる。注文した時点の名前を焼き込む前提でよいか</td></tr>\n      <tr><td>集計メッセージの pin</td><td>step 4 まで</td><td>Bot に自動で pin させるなら <code>Manage Messages</code> 権限が必要。幹事が手で pin してもいい</td></tr>\n      <tr><td>同じチャンネルで2件同時に走った場合</td><td>実運用前</td><td>破綻はしないが pin が2枚になって紛らわしい。1チャンネル1件に制限するかどうか</td></tr>\n    </tbody>\n  </table>\n  </div>\n</section>\n\n</div>",
+    "repo": "Gaku1031/alumni-mini-hackathon-template",
+    "repoUrl": "https://github.com/Gaku1031/alumni-mini-hackathon-template",
+    "projectUrl": "https://github.com/users/Gaku1031/projects/4"
+  },
+  "epics": [
+    {
+      "id": "E1",
+      "title": "土台（署名検証・D1・Discord API・テスト基盤）",
+      "milestone": 1,
+      "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/milestone/1"
+    },
+    {
+      "id": "E2",
+      "title": "イベント作成と集計メッセージ",
+      "milestone": 2,
+      "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/milestone/2"
+    },
+    {
+      "id": "E3",
+      "title": "注文導線（入力・選択・取り消し）",
+      "milestone": 3,
+      "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/milestone/3"
+    },
+    {
+      "id": "E4",
+      "title": "締切・割り勘・集金",
+      "milestone": 4,
+      "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/milestone/4"
+    },
+    {
+      "id": "E5",
+      "title": "セットアップと運用",
+      "milestone": 5,
+      "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/milestone/5"
+    }
+  ],
+  "issues": [
+    {
+      "id": "I1",
+      "epic": "E1",
+      "title": "署名検証と PING 応答（Interactions Endpoint を通す）",
+      "slug": "verify-signature-ping",
+      "goal": "Discord の Interactions Endpoint URL 登録が成功する状態になる",
+      "background": "Discord は Ed25519 署名付きで POST してくる。ここが通らないと Bot は1ミリも動かない。生ボディを先に読む・公開鍵を取り違えない・PING に type:1 を返す、の3点が関門。",
+      "io": "src/index.ts（fetch ハンドラ・verifyKey）、test/interaction.test.mjs、.dev.vars.example",
+      "nonGoals": "D1 アクセス、コマンド処理、メッセージ描画",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "正しい署名の PING(type:1) に対し 200 と {\"type\":1} を返す",
+          "verify": "node --test test/interaction.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "署名ヘッダが欠落／不正なリクエストは 401 を返し、本文の JSON パースを行わない",
+          "verify": "node --test test/interaction.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "検証は生ボディ文字列に対して行われる（req.json() を先に呼ばない）ことがテストで担保される",
+          "verify": "node --test test/interaction.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "GET など POST 以外のメソッドは 405 を返す",
+          "verify": "node --test test/interaction.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "外部ライブラリを追加せず crypto.subtle だけで検証している（package.json の dependencies が空）",
+          "verify": "node --test test/interaction.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [],
+      "github": {
+        "number": 2,
+        "nodeId": "I_kwDOUL7D988AAAABPW-EYw",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/2",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G94k"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I2",
+      "epic": "E1",
+      "title": "マイグレーション3テーブルと db スクリプト",
+      "slug": "d1-initial-migrations",
+      "goal": "migrations/0001_init.sql が SQLite に適用でき、3テーブルと制約が作られる",
+      "background": "bento_events / bento_orders / guild_settings の3つ。SQLite なので uuid・boolean・jsonb は使えない。unique(event_id, discord_user_id) が「1人1個」を構造で担保する要。",
+      "io": "migrations/0001_init.sql、package.json の db:create / db:new / db:apply / db:apply:remote",
+      "nonGoals": "アプリからのクエリ実装（I3）",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "migrations/*.sql を順に適用すると bento_events / bento_orders / guild_settings の3テーブルと idx_bento_orders_event が作成される",
+          "verify": "node --test test/migration.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "同一 event_id・同一 discord_user_id の2件目の insert が UNIQUE 制約違反で失敗する",
+          "verify": "node --test test/migration.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "status に 'open'/'closed' 以外を入れると CHECK 制約で失敗する",
+          "verify": "node --test test/migration.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "bento_events を削除すると紐づく bento_orders が cascade で消える",
+          "verify": "node --test test/migration.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "package.json に db:create / db:new / db:apply / db:apply:remote が定義され、apply と apply:remote が別コマンドになっている",
+          "verify": "node --test test/migration.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [],
+      "github": {
+        "number": 3,
+        "nodeId": "I_kwDOUL7D988AAAABPW-FzQ",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/3",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G95k"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I3",
+      "epic": "E1",
+      "title": "D1 アクセス層とテスト用インメモリ D1 スタブ",
+      "slug": "d1-repo-and-stub",
+      "goal": "全クエリが1モジュールに集約され、node:sqlite 上で env.DB 互換に動かせる",
+      "background": "以降のすべての issue がこのアクセス層とスタブの上で検証される。検証の土台なので画面系より先に置く。プレースホルダ必須のルールもここで守らせる。",
+      "io": "src/db.ts（createEvent / getEvent / listOrders / addOrder / deleteOrder / setPaid / distinctItems / getPaypayUrl 等）、test/helpers/d1.mjs",
+      "nonGoals": "Discord 側の処理、描画",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "test/helpers/d1.mjs が prepare().bind().first()/all()/run() を持つ env.DB 互換オブジェクトを返し、migrations を適用済みで起動する",
+          "verify": "node --test test/db.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "createEvent で作った行を getEvent が同じ内容（shared_costs は配列にパース済み）で返す",
+          "verify": "node --test test/db.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "addOrder を同一ユーザーで2回呼ぶと重複エラーとして識別可能な結果を返し、例外で落ちない",
+          "verify": "node --test test/db.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "distinctItems が event 内の item_name・price の重複を除いた一覧を返す",
+          "verify": "node --test test/db.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "src/db.ts の SQL に文字列連結でユーザー入力を埋め込んだ箇所が無く、すべて ? プレースホルダである",
+          "verify": "node --test test/db.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I2"
+      ],
+      "github": {
+        "number": 4,
+        "nodeId": "I_kwDOUL7D988AAAABPW-G-g",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/4",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G96Y"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I4",
+      "epic": "E1",
+      "title": "Discord API クライアントと deferred 応答の枠組み",
+      "slug": "discord-api-client",
+      "goal": "メッセージの投稿・PATCH と、type:5 → waitUntil で追いかける流れが共通化される",
+      "background": "Discord は3秒で切る。D1 読み書き＋PATCH が挟まる操作は deferred が要る。fetch をスタブ可能にしておかないと以降の issue が検証できないので、これも土台として先に置く。",
+      "io": "src/discord.ts（postMessage / patchMessage / respond ヘルパ）、test/helpers/fetch-stub.mjs",
+      "nonGoals": "具体的なインタラクションのハンドリング",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "postMessage が POST /channels/{id}/messages を Bot Token 付きで呼び、返った message id を返す",
+          "verify": "node --test test/discord.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "patchMessage が PATCH /channels/{id}/messages/{message_id} を呼ぶ",
+          "verify": "node --test test/discord.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "deferred 応答ヘルパが即座に type:5 を返し、後続処理を ctx.waitUntil に渡す",
+          "verify": "node --test test/discord.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "Discord API が 4xx を返した場合に例外を握りつぶさず、呼び出し元が失敗を判別できる",
+          "verify": "node --test test/discord.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "Bot Token がリクエストボディやレスポンスに含まれない",
+          "verify": "node --test test/discord.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I1"
+      ],
+      "github": {
+        "number": 5,
+        "nodeId": "I_kwDOUL7D988AAAABPW-IHQ",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/5",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G97Y"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I5",
+      "epic": "E2",
+      "title": "注文フェーズの集計メッセージ描画（純関数）",
+      "slug": "render-order-phase",
+      "goal": "注文一覧から Embed とボタン行を組み立てる関数ができる",
+      "background": "製品のすべてがこの1枚のメッセージ。品ごとにグルーピングして人数と注文者名を並べ、弁当代合計を出す。選択肢0件のとき [頼む ▼] を出さない仕様もここで担保する。",
+      "io": "src/render.ts（renderOpen）、test/render.test.mjs",
+      "nonGoals": "集金フェーズの描画（I11）、DB アクセス",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "同じ item_name+price の注文が1行にまとまり、×人数 と注文者の display_name が並ぶ",
+          "verify": "node --test test/render.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "弁当代の合計が全注文の price 合計と一致する",
+          "verify": "node --test test/render.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "注文0件のとき components に [頼む ▼] のセレクトが含まれず、[新しく入力] は含まれる",
+          "verify": "node --test test/render.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "注文1件以上のとき [頼む ▼] [新しく入力] [取り消す ▼] [締め切る] の4つが含まれる",
+          "verify": "node --test test/render.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "menu_url が null のときメニュー行が出力されず、値があるとき URL が表示される",
+          "verify": "node --test test/render.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-6",
+          "text": "セレクトの選択肢が25件を超えない",
+          "verify": "node --test test/render.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I3"
+      ],
+      "github": {
+        "number": 6,
+        "nodeId": "I_kwDOUL7D988AAAABPW-JZw",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/6",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G98c"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I6",
+      "epic": "E2",
+      "title": "/bento コマンド → Modal → イベント作成と集計メッセージ投稿",
+      "slug": "bento-command-flow",
+      "goal": "/bento を打つとチャンネルに空の集計メッセージが投稿され、message_id が保存される",
+      "background": "step 4 の一直線。タイトル・メニューURL を Modal で受け取り、bento_events を作り、投稿した message_id を保存する。これが無いと以降の書き換え対象が決まらない。",
+      "io": "src/index.ts のコマンド／モーダル分岐、src/db.ts、src/render.ts",
+      "nonGoals": "注文の登録（I7）",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "type:2 かつ name='bento' のインタラクションに type:9（Modal）を返す",
+          "verify": "node --test test/bento-command.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "Modal 送信（type:5 interaction）で bento_events が1件作られ、status が 'open' になる",
+          "verify": "node --test test/bento-command.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "集計メッセージを投稿した結果の message_id が bento_events.message_id に保存される",
+          "verify": "node --test test/bento-command.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "タイトルが空文字のとき ephemeral エラーを返し、イベントを作らない",
+          "verify": "node --test test/bento-command.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "3秒制約に合わせ、投稿処理を含む応答が deferred または即時応答のいずれかで返り、ハンドラが Discord API 完了を待ってから応答を返さない",
+          "verify": "node --test test/bento-command.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I3",
+        "I4",
+        "I5"
+      ],
+      "github": {
+        "number": 7,
+        "nodeId": "I_kwDOUL7D988AAAABPW-KjQ",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/7",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G99o"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I7",
+      "epic": "E3",
+      "title": "[新しく入力] → 品名・金額の Modal で注文を登録",
+      "slug": "new-item-order",
+      "goal": "最初の1人が品名と金額を入力すると集計メッセージが書き換わる",
+      "background": "注文がそのままメニューになる設計の入口。ここで入った品が次の人の [頼む ▼] の選択肢になる。金額のバリデーションはしない（表に出るので人間が気づく）が、数値として解釈できない入力は保存しない。",
+      "io": "src/index.ts の custom_id 'new_item' 分岐、src/db.ts の addOrder",
+      "nonGoals": "選択肢からの注文（I8）",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "[新しく入力] のボタン押下に品名・金額の2欄を持つ Modal を返す",
+          "verify": "node --test test/order-new.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "Modal 送信で bento_orders に1件入り、discord_user_id と display_name がインタラクションの member から取られる",
+          "verify": "node --test test/order-new.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "注文後に元メッセージが PATCH され、新しい行が含まれる",
+          "verify": "node --test test/order-new.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "すでに注文済みのユーザーが再度送信すると、既存注文が上書きされるか ephemeral で通知され、重複行は増えない",
+          "verify": "node --test test/order-new.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "金額が数値として解釈できない入力は ephemeral エラーになり、行が増えない",
+          "verify": "node --test test/order-new.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-6",
+          "text": "status='closed' のイベントに対する注文は拒否される",
+          "verify": "node --test test/order-new.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I6"
+      ],
+      "github": {
+        "number": 8,
+        "nodeId": "I_kwDOUL7D988AAAABPW-L0Q",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/8",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G9-c"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I8",
+      "epic": "E3",
+      "title": "[頼む ▼] 既出の品から1タップ注文",
+      "slug": "order-from-select",
+      "goal": "2人目以降が一文字も打たずに同じ品を注文できる",
+      "background": "表記ゆれが起きない理由が「打つより押すほうが楽」であること。選択肢は select distinct item_name, price で作り、メニュー用テーブルは持たない。",
+      "io": "src/index.ts の custom_id 'order_select' 分岐、src/db.ts の distinctItems",
+      "nonGoals": "メニュー登録機能",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "セレクトの選択肢が既存注文の item_name+price の重複を除いた一覧と一致する",
+          "verify": "node --test test/order-select.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "選択すると bento_orders に1件入り、item_name と price が選んだ品と一致する",
+          "verify": "node --test test/order-select.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "注文後に元メッセージが PATCH され、その品の人数が1増えている",
+          "verify": "node --test test/order-select.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "すでに注文済みのユーザーが選び直すと行が増えず、注文内容が入れ替わる",
+          "verify": "node --test test/order-select.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "status='closed' のイベントでは選択が拒否される",
+          "verify": "node --test test/order-select.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I7"
+      ],
+      "github": {
+        "number": 9,
+        "nodeId": "I_kwDOUL7D988AAAABPW-NJw",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/9",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-AQ"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I9",
+      "epic": "E3",
+      "title": "[取り消す ▼] 誰の注文でも消せる",
+      "slug": "cancel-order-select",
+      "goal": "セレクトから注文を選ぶと削除され、集計が更新される",
+      "background": "打ち間違いの修正手段を兼ねる。権限チェックは書かない（内輪で悪用されない前提）ので、誰のでも消せることが仕様。",
+      "io": "src/index.ts の custom_id 'cancel_select' 分岐、src/db.ts の deleteOrder",
+      "nonGoals": "権限チェック",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "セレクトの選択肢に全注文者の注文が並ぶ（自分の分だけに絞られない）",
+          "verify": "node --test test/order-cancel.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "他人の注文を選んで削除できる（押した人と注文者が違っても成功する）",
+          "verify": "node --test test/order-cancel.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "削除後に元メッセージが PATCH され、その行の人数が1減るか行自体が消える",
+          "verify": "node --test test/order-cancel.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "全件削除すると [頼む ▼] が消え、[新しく入力] だけが残る",
+          "verify": "node --test test/order-cancel.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "すでに削除済みの注文を選んでもエラーで落ちず、ephemeral で通知される",
+          "verify": "node --test test/order-cancel.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I7"
+      ],
+      "github": {
+        "number": 10,
+        "nodeId": "I_kwDOUL7D988AAAABPW-OqA",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/10",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-BU"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I10",
+      "epic": "E4",
+      "title": "割り勘計算（均等割・端数切り上げ・余り）の純関数",
+      "slug": "split-cost-calc",
+      "goal": "共通費用と注文一覧から各自の支払額と余りが算出できる",
+      "background": "配送料は均等割だが弁当の値段が違うので各自の支払額はバラバラ。切り捨てると幹事が持ち出しになるので切り上げる。複数の共通費用行に同じロジックを使い回す。",
+      "io": "src/split.ts（splitShared）、test/split.test.mjs",
+      "nonGoals": "描画、DB アクセス",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "配送料500・6人で1人あたり84（切り上げ）を返す",
+          "verify": "node --test test/split.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "余りが 84×6 − 500 = 4 として返る",
+          "verify": "node --test test/split.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "共通費用が複数行（配送料500・API代300）のとき合計に対して均等割され、1人あたりが 134 になる",
+          "verify": "node --test test/split.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "共通費用が空配列のとき1人あたり0・余り0を返し、各自の支払額が弁当代と一致する",
+          "verify": "node --test test/split.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "注文0件のときゼロ除算を起こさず1人あたり0を返す",
+          "verify": "node --test test/split.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-6",
+          "text": "各自の支払額が price + 1人あたり割前 と一致する",
+          "verify": "node --test test/split.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [],
+      "github": {
+        "number": 11,
+        "nodeId": "I_kwDOUL7D988AAAABPW-Qcw",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/11",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-CE"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I11",
+      "epic": "E4",
+      "title": "集金フェーズの集計メッセージ描画（純関数）",
+      "slug": "render-payment-phase",
+      "goal": "各行に実際に送る金額と、集金の進捗・未払い者・送金先が出る",
+      "background": "暗算ゼロが要件。行ごとに ¥650 + ¥84 = ¥734 の形で実額を出す。未払いは名指しで表示するが通知は飛ばさない。",
+      "io": "src/render.ts（renderClosed）、src/split.ts、test/render-closed.test.mjs",
+      "nonGoals": "支払い状態の更新（I13）",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "各行が「弁当代 + 割前 = 送る金額」の3値を含み、送る金額が splitShared の結果と一致する",
+          "verify": "node --test test/render-closed.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "合計行に弁当代・共通費用・総額が出て、共通費用の内訳ラベルが表示される",
+          "verify": "node --test test/render-closed.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "集金の進捗が「支払い済み人数/全人数」で出て、未払い者の display_name が列挙される",
+          "verify": "node --test test/render-closed.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "出力に @here や <@userid> のメンションが一切含まれない",
+          "verify": "node --test test/render-closed.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "guild_settings.paypay_url がある場合は送金先が表示され、無い場合は行ごと出ない",
+          "verify": "node --test test/render-closed.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-6",
+          "text": "components が [支払った] [未払いに戻す ▼] の2つだけで、注文フェーズのボタンを含まない",
+          "verify": "node --test test/render-closed.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I5",
+        "I10"
+      ],
+      "github": {
+        "number": 12,
+        "nodeId": "I_kwDOUL7D988AAAABPW-SHA",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/12",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-DU"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I12",
+      "epic": "E4",
+      "title": "[締め切る] → 共通費用 Modal → 集金フェーズへ切り替え",
+      "slug": "close-event-modal",
+      "goal": "締め切ると金額が確定し、@here で1回だけ通知して集金モードになる",
+      "background": "Modal が開くこと自体が2段階確認なので誤爆しない。共通費用は改行区切りの「ラベル 金額」で複数行を受け取り、shared_costs に JSON 文字列で持つ。",
+      "io": "src/index.ts の custom_id 'close' 分岐、src/db.ts の closeEvent、src/split.ts",
+      "nonGoals": "締切後の変更・キャンセル対応",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "[締め切る] 押下で共通費用入力欄を持つ Modal（type:9）を返し、この時点では status が変わらない",
+          "verify": "node --test test/close-event.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "「配送料 500」「API代 300」の2行を送ると shared_costs に2要素の JSON が保存され、status が 'closed' になる",
+          "verify": "node --test test/close-event.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "入力が空欄のとき shared_costs が '[]' のまま closed になり、エラーにならない",
+          "verify": "node --test test/close-event.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "締切後に元メッセージが集金フェーズの内容で PATCH される",
+          "verify": "node --test test/close-event.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "@here を含む通知メッセージが1回だけ投稿される（2回目の締切操作では投稿されない）",
+          "verify": "node --test test/close-event.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-6",
+          "text": "金額として読めない行は無視され、他の行の保存を妨げない",
+          "verify": "node --test test/close-event.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I6",
+        "I11"
+      ],
+      "github": {
+        "number": 13,
+        "nodeId": "I_kwDOUL7D988AAAABPW-TWQ",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/13",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-EE"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I13",
+      "epic": "E4",
+      "title": "[支払った] / [未払いに戻す ▼] で集金状態を更新",
+      "slug": "payment-toggle",
+      "goal": "各自の申告で未払い表示が減り、0人にできる",
+      "background": "PayPay 送金は本人がその場で完了させる行為なので自己申告で足りる。戻す側は齟齬の修正用に全員が使える。",
+      "io": "src/index.ts の custom_id 'paid' / 'unpaid_select' 分岐、src/db.ts の setPaid",
+      "nonGoals": "送金の実行・確認",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "[支払った] を押すと押した本人の注文の paid が 1 になる",
+          "verify": "node --test test/payment.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "注文していないユーザーが [支払った] を押すと ephemeral で通知され、DB が変化しない",
+          "verify": "node --test test/payment.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "[未払いに戻す ▼] の選択肢に支払い済みの人が並び、他人を選んで paid を 0 に戻せる",
+          "verify": "node --test test/payment.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "更新のたびに元メッセージが PATCH され、集金 n/m と未払い者一覧が最新になる",
+          "verify": "node --test test/payment.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "全員が支払うと未払い者の列挙が空になり、集金 m/m と表示される",
+          "verify": "node --test test/payment.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-6",
+          "text": "すでに paid=1 の人が再度 [支払った] を押しても状態が壊れず、エラーにならない",
+          "verify": "node --test test/payment.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I11",
+        "I12"
+      ],
+      "github": {
+        "number": 14,
+        "nodeId": "I_kwDOUL7D988AAAABPW-Udg",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/14",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-FA"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I14",
+      "epic": "E4",
+      "title": "guild_settings への送金先 URL 登録",
+      "slug": "paypay-url-setting",
+      "goal": "サーバーごとの送金先 URL を登録でき、集金フェーズに反映される",
+      "background": "未決事項だった「PayPay リンクの登録方法」を決着させる。/bento の Modal に混ぜるか専用コマンドかは実装側で選び、guild_id ごとに1件保持する。",
+      "io": "src/index.ts、src/db.ts の setPaypayUrl / getPaypayUrl、migrations（既存 guild_settings を使用）",
+      "nonGoals": "決済連携そのもの",
+      "ui": true,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "URL を登録すると guild_settings に guild_id をキーに1件保存される",
+          "verify": "node --test test/guild-settings.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "同じ guild で再登録すると行が増えず値が更新される",
+          "verify": "node --test test/guild-settings.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "登録済みの guild で締め切ると集金メッセージに送金先 URL が含まれる",
+          "verify": "node --test test/guild-settings.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "未登録の guild でも締切処理が成功し、送金先の行だけが出ない",
+          "verify": "node --test test/guild-settings.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I12"
+      ],
+      "github": {
+        "number": 15,
+        "nodeId": "I_kwDOUL7D988AAAABPW-VwA",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/15",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-F0"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I15",
+      "epic": "E5",
+      "title": "スラッシュコマンド登録スクリプト",
+      "slug": "register-slash-commands",
+      "goal": "npm run で /bento（および設定コマンド）を Discord に登録できる",
+      "background": "コマンドは Discord 側に登録しないと出てこない。手作業の curl を README に書くのではなく、スクリプトにして再実行可能にする。",
+      "io": "scripts/register-commands.mjs、package.json の register スクリプト",
+      "nonGoals": "Bot の招待 URL 生成",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "コマンド定義（name・description・options）が Discord のスキーマ制約（name は英小文字）を満たす",
+          "verify": "node --test test/register-commands.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "必要な環境変数が無いとき、非0で終了し何を設定すべきか標準エラーに出す",
+          "verify": "node --test test/register-commands.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "スクリプトが送信するリクエストが PUT の一括上書きで、実行を繰り返してもコマンドが重複しない",
+          "verify": "node --test test/register-commands.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "package.json に register スクリプトが定義されている",
+          "verify": "node --test test/register-commands.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I1"
+      ],
+      "github": {
+        "number": 16,
+        "nodeId": "I_kwDOUL7D988AAAABPW-XAQ",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/16",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-HM"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I16",
+      "epic": "E5",
+      "title": "セットアップ手順とシークレット管理の整備",
+      "slug": "setup-docs-secrets",
+      "goal": "README の手順どおりに進めれば別の人が動く状態まで到達できる",
+      "background": "step 1〜3 の順序（deploy で URL 確定 → Endpoint 登録 → マイグレーション）と、ローカル/リモート D1 が別物であること、secret を wrangler.jsonc の vars に書かないことを明記する必要がある。",
+      "io": "README.md、.dev.vars.example、wrangler.jsonc、.gitignore",
+      "nonGoals": "CI の構築",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": ".dev.vars.example に DISCORD_PUBLIC_KEY と DISCORD_BOT_TOKEN の2つだけが列挙され、実値が入っていない",
+          "verify": "node --test test/setup-docs.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "wrangler.jsonc の vars に DISCORD_PUBLIC_KEY / DISCORD_BOT_TOKEN が書かれていない",
+          "verify": "node --test test/setup-docs.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": ".gitignore に .dev.vars が含まれ、リポジトリに .dev.vars が存在しない",
+          "verify": "node --test test/setup-docs.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "README に db:apply と db:apply:remote の両方を打つ手順が書かれている",
+          "verify": "node --test test/setup-docs.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "README に deploy → Interactions Endpoint URL 登録 → マイグレーションの順序が明記されている",
+          "verify": "node --test test/setup-docs.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-6",
+          "text": "wrangler.jsonc に d1_databases の binding 名 DB が定義されている",
+          "verify": "node --test test/setup-docs.test.mjs",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I2",
+        "I15"
+      ],
+      "github": {
+        "number": 17,
+        "nodeId": "I_kwDOUL7D988AAAABPW-YRQ",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/17",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-IA"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    },
+    {
+      "id": "I17",
+      "epic": "E5",
+      "title": "Biome と型チェックを1コマンドで通す",
+      "slug": "biome-typecheck-gate",
+      "goal": "npm run check がリポジトリ全体で通り、依存の増加を検知できる",
+      "background": "Lint は Biome に一本化する方針（ESLint・Prettier を入れない）。軽さ優先の方針も、依存が増えていないことを機械的に確かめられる形にしておく。",
+      "io": "biome.json、package.json の check / check:fix / typecheck、worker-configuration.d.ts",
+      "nonGoals": "GitHub Actions の設定",
+      "ui": false,
+      "ac": [
+        {
+          "id": "AC-1",
+          "text": "npm run check がリポジトリ直下で終了コード0になる",
+          "verify": "npm run check",
+          "done": false
+        },
+        {
+          "id": "AC-2",
+          "text": "Biome の設定がインデント2スペース・ダブルクォート・行幅100になっている",
+          "verify": "node --test test/toolchain.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-3",
+          "text": "package.json に eslint / prettier が含まれず、dependencies が空である",
+          "verify": "node --test test/toolchain.test.mjs",
+          "done": false
+        },
+        {
+          "id": "AC-4",
+          "text": "TypeScript の型チェックが終了コード0で通る",
+          "verify": "npm run typecheck",
+          "done": false
+        },
+        {
+          "id": "AC-5",
+          "text": "全テストがまとめて実行でき、終了コード0になる",
+          "verify": "npm test",
+          "done": false
+        }
+      ],
+      "deps": [
+        "I1"
+      ],
+      "github": {
+        "number": 18,
+        "nodeId": "I_kwDOUL7D988AAAABPW-ZYA",
+        "url": "https://github.com/Gaku1031/alumni-mini-hackathon-template/issues/18",
+        "itemId": "PVTI_lAHOBZ_OEM4BgDpMzg5G-Jo"
+      },
+      "lane": {
+        "state": "pending",
+        "branch": null,
+        "worktree": null,
+        "pr": null,
+        "lastLine": null
+      },
+      "closed": false
+    }
+  ],
+  "docs": [
+    {
+      "id": "D1",
+      "kind": "design",
+      "title": "grill-me 合意メモ: アルムナイ弁当注文&集計ツール",
+      "path": "grill-bento-order-20260902.md"
+    }
+  ]
+}
