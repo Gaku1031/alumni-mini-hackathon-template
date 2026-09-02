@@ -27,7 +27,7 @@ import {
   postMessage,
   reply,
 } from "./discord";
-import { CLOSE_MODAL, newItemModal, renderCloseModal, renderClosed, renderOpen } from "./render";
+import { CLOSE_MODAL, newItemModal, renderClosed, renderCloseModal, renderOpen } from "./render";
 import { parseSharedCosts, splitShared } from "./split";
 
 /** Discord が送ってくる interaction type のうち、使うものだけ */
