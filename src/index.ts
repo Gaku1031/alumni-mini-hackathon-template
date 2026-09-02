@@ -60,7 +60,10 @@ function reply(content: string) {
 
 export default {
   async fetch(req: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
-    if (req.method !== "POST") return new Response("ok");
+    // Discord は POST しか投げてこない。それ以外は受け付けない
+    if (req.method !== "POST") {
+      return new Response("method not allowed", { status: 405, headers: { allow: "POST" } });
+    }
 
     // 生ボディが要る。先に req.json() すると署名検証ができなくなる
     const rawBody = await req.text();
