@@ -64,11 +64,9 @@ function loadDevVars() {
  */
 export function commandsFor(guildId) {
   if (!guildId) return COMMANDS;
-  return COMMANDS.map((command) => {
-    const guildCommand = { ...command };
-    delete guildCommand.contexts;
-    return guildCommand;
-  });
+  return COMMANDS.map((command) =>
+    Object.fromEntries(Object.entries(command).filter(([key]) => key !== "contexts")),
+  );
 }
 
 /**

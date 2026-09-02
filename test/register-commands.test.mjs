@@ -77,10 +77,10 @@ test("コマンド定義が Discord のスキーマ制約を満たす", () => {
 });
 
 test("環境変数が無ければ非0で終了し、何を設定すべきか stderr に出す", async () => {
-  const env = { ...process.env };
-  for (const name of ["DISCORD_APPLICATION_ID", "DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID"]) {
-    delete env[name];
-  }
+  const dropped = ["DISCORD_APPLICATION_ID", "DISCORD_BOT_TOKEN", "DISCORD_GUILD_ID"];
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !dropped.includes(name)),
+  );
   // .dev.vars を拾わせないために、リポジトリの外で動かす
   const err = await run("node", [SCRIPT], { env, cwd: tmpdir() }).then(
     () => null,
