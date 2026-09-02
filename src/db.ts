@@ -17,7 +17,9 @@ const UPDATE_EVENT_MESSAGE = `update bento_events set message_id = ? where id = 
 
 const CLOSE_EVENT = `update bento_events set status = 'closed', shared_costs = ? where id = ?`;
 
-const SELECT_ORDERS = `select * from bento_orders where event_id = ? order by created_at, id`;
+// created_at は datetime('now') の秒精度。同じ秒に入った注文の順は決まらないので、
+// 挿入順そのものである rowid で必ずタイブレークする（id はランダムな UUID なので使えない）
+const SELECT_ORDERS = `select * from bento_orders where event_id = ? order by created_at, rowid`;
 
 // 1人1個は unique 制約で担保されている。2回目は例外ではなく changes = 0 になる
 const INSERT_ORDER = `insert into bento_orders
