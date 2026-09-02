@@ -34,6 +34,10 @@ export type ItemGroup = {
 const ACTION_ROW = 1;
 const BUTTON = 2;
 const STRING_SELECT = 3;
+const TEXT_INPUT = 4;
+
+/** テキスト入力の style。複数行で受けるので PARAGRAPH */
+const PARAGRAPH = 2;
 
 /** ボタンの style */
 const PRIMARY = 1;
@@ -127,6 +131,34 @@ export function renderOpen(event: BentoEvent, orders: Order[]): MessageBody {
   return {
     embeds: [{ title: `📌 ${event.title}`, description }],
     components: rows,
+  };
+}
+
+/**
+ * 締め切り Modal の custom_id。うしろに集計メッセージの id を繋げて、
+ * submit されたときにどのイベントの締め切りかを引き当てる。
+ */
+export const CLOSE_MODAL = "close_modal:";
+
+/**
+ * `[締め切る]` で開く共通費用の入力欄。
+ * この窓が開くこと自体が確認ステップなので、「本当に締め切りますか」は聞かない。
+ * 共通費用が無い会もあるので required は付けない（空のまま送れば ¥0 で締まる）。
+ */
+export function renderCloseModal(messageId: string): MessageBody {
+  return {
+    custom_id: `${CLOSE_MODAL}${messageId}`,
+    title: "締め切る",
+    components: [
+      row({
+        type: TEXT_INPUT,
+        custom_id: "shared_costs",
+        style: PARAGRAPH,
+        label: "共通費用",
+        placeholder: "配送料 500\nAPI代 300",
+        required: false,
+      }),
+    ],
   };
 }
 

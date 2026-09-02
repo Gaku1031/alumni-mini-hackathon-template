@@ -12,6 +12,7 @@ const API = "https://discord.com/api/v10";
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
+const MODAL = 9;
 
 /** 本人にしか見えないメッセージ */
 const EPHEMERAL = 64;
@@ -82,6 +83,14 @@ export function pong(): Response {
 /** その場で返せる短い返事。押した本人にしか見せない */
 export function reply(content: string): Response {
   return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+}
+
+/**
+ * 入力欄を開く。deferred したあとには出せないので、その場で返すこと。
+ * 開いている間は Discord 側で待ってくれるので、3秒制限に追われない。
+ */
+export function modal(data: MessageBody): Response {
+  return json({ type: MODAL, data });
 }
 
 /**

@@ -13,9 +13,15 @@ values (?, ?, ?, ?, ?)`;
 
 const SELECT_EVENT = `select * from bento_events where id = ?`;
 
+// ボタンから来る interaction が持っているのは押されたメッセージの id だけ
+const SELECT_EVENT_BY_MESSAGE = `select * from bento_events where message_id = ?`;
+
 const UPDATE_EVENT_MESSAGE = `update bento_events set message_id = ? where id = ?`;
 
-const CLOSE_EVENT = `update bento_events set status = 'closed', shared_costs = ? where id = ?`;
+// status = 'open' を条件に入れているのが「締め切りは1回だけ」の担保。
+// 2回目は例外ではなく changes = 0 になるので、@here もそこで止まる
+const CLOSE_EVENT = `update bento_events set status = 'closed', shared_costs = ?
+where id = ? and status = 'open'`;
 
 // created_at は datetime('now') の秒精度。同じ秒に入った注文の順は決まらないので、
 // 挿入順そのものである rowid で必ずタイブレークする（id はランダムな UUID なので使えない）
@@ -87,10 +93,20 @@ export async function createEvent(
   return id;
 }
 
+/** shared_costs だけ文字列で入っているので、読むときに配列へ戻す */
+const toEvent = (row: EventRow | null): BentoEvent | null =>
+  row && { ...row, shared_costs: JSON.parse(row.shared_costs) };
+
 export async function getEvent(db: D1Database, eventId: string): Promise<BentoEvent | null> {
-  const row = await db.prepare(SELECT_EVENT).bind(eventId).first<EventRow>();
-  if (!row) return null;
-  return { ...row, shared_costs: JSON.parse(row.shared_costs) };
+  return toEvent(await db.prepare(SELECT_EVENT).bind(eventId).first<EventRow>());
+}
+
+/** 集計メッセージのボタンを押されたとき、そのメッセージからイベントを引く */
+export async function getEventByMessageId(
+  db: D1Database,
+  messageId: string,
+): Promise<BentoEvent | null> {
+  return toEvent(await db.prepare(SELECT_EVENT_BY_MESSAGE).bind(messageId).first<EventRow>());
 }
 
 /** 集計メッセージを投稿したあとに、その message_id を書き戻す */
@@ -98,13 +114,17 @@ export async function setMessageId(db: D1Database, eventId: string, id: string):
   await db.prepare(UPDATE_EVENT_MESSAGE).bind(id, eventId).run();
 }
 
-/** `[締め切る]` の Modal で入った共通費用を焼き込んで集金フェーズへ移す */
+/**
+ * `[締め切る]` の Modal で入った共通費用を焼き込んで集金フェーズへ移す。
+ * 締め切れたら true。すでに closed なら false（金額は上書きしない）。
+ */
 export async function closeEvent(
   db: D1Database,
   eventId: string,
   sharedCosts: SharedCost[],
-): Promise<void> {
-  await db.prepare(CLOSE_EVENT).bind(JSON.stringify(sharedCosts), eventId).run();
+): Promise<boolean> {
+  const { meta } = await db.prepare(CLOSE_EVENT).bind(JSON.stringify(sharedCosts), eventId).run();
+  return meta.changes > 0;
 }
 
 /** 集計メッセージを描くたびに呼ぶ。注文順なので表示の並びが毎回同じになる */
