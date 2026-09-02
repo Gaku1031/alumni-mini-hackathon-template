@@ -87,7 +87,7 @@ export async function createEvent(
 
 export async function getEvent(db: D1Database, eventId: string): Promise<BentoEvent | null> {
   const row = await db.prepare(SELECT_EVENT).bind(eventId).first<EventRow>();
-  if (row === null) return null;
+  if (!row) return null;
   return { ...row, shared_costs: JSON.parse(row.shared_costs) };
 }
 
@@ -146,7 +146,8 @@ export async function distinctItems(db: D1Database, eventId: string): Promise<Me
 }
 
 export async function getPaypayUrl(db: D1Database, guildId: string): Promise<string | null> {
-  return await db.prepare(SELECT_PAYPAY_URL).bind(guildId).first<string>("paypay_url");
+  const url = await db.prepare(SELECT_PAYPAY_URL).bind(guildId).first<string>("paypay_url");
+  return url ?? null;
 }
 
 export async function setPaypayUrl(db: D1Database, guildId: string, url: string): Promise<void> {

@@ -35,15 +35,45 @@ const order = (eventId, over = {}) => ({
   ...over,
 });
 
-test("migrations を当てた env.DB 互換オブジェクトが立つ", async () => {
+test("AC-1: migrations 適用済みで立ち、prepare().bind() から first()/all()/run() が使える", async () => {
   const conn = createTestDb();
-  const row = await conn.prepare("select count(*) as n from bento_orders").bind().first();
-  assert.equal(row.n, 0);
-  assert.equal(await conn.prepare("select 1 as one").bind().first("one"), 1);
+
+  // migrations の3テーブルが揃っている
+  const { results } = await conn
+    .prepare("select name from sqlite_master where type = 'table' order by name")
+    .bind()
+    .all();
+  const tables = results.map((row) => row.name);
+  for (const table of ["bento_events", "bento_orders", "guild_settings"]) {
+    assert.ok(tables.includes(table), `${table} が無い`);
+  }
+
+  // run() は書けて、変更行数を D1 と同じ meta.changes で返す
+  const insert = await conn
+    .prepare("insert into guild_settings (guild_id, paypay_url) values (?, ?)")
+    .bind("g1", "https://paypay.me/xxxx")
+    .run();
+  assert.equal(insert.success, true);
+  assert.equal(insert.meta.changes, 1);
+
+  // all() は results の配列、first() は1行目、列名を渡せばその値
+  const select = conn.prepare("select guild_id, paypay_url from guild_settings where guild_id = ?");
+  assert.deepEqual((await select.bind("g1").all()).results, [
+    { guild_id: "g1", paypay_url: "https://paypay.me/xxxx" },
+  ]);
+  assert.deepEqual(await select.bind("g1").first(), {
+    guild_id: "g1",
+    paypay_url: "https://paypay.me/xxxx",
+  });
+  assert.equal(await select.bind("g1").first("paypay_url"), "https://paypay.me/xxxx");
+
+  // 0件のときは all() が空配列、first() は null
+  assert.deepEqual((await select.bind("none").all()).results, []);
+  assert.equal(await select.bind("none").first(), null);
   conn.close();
 });
 
-test("createEvent した内容を getEvent がそのまま返す", async () => {
+test("AC-2: createEvent で作った行を getEvent が同じ内容で返す（shared_costs は配列）", async () => {
   const conn = createTestDb();
   const id = await newEvent(conn);
   const event = await db.getEvent(conn, id);
@@ -55,6 +85,18 @@ test("createEvent した内容を getEvent がそのまま返す", async () => {
   assert.equal(event.menu_url, "https://tenpo.example.com/bento");
   assert.equal(event.status, "open");
   assert.equal(event.message_id, null);
+  assert.match(event.created_at, /^\d{4}-\d{2}-\d{2} /);
+
+  // 文字列のままではなくパース済みの配列で返る
+  assert.ok(Array.isArray(event.shared_costs), "shared_costs が配列になっていない");
+  assert.deepEqual(event.shared_costs, []);
+  conn.close();
+});
+
+test("menu_url を渡さなければ null で入る", async () => {
+  const conn = createTestDb();
+  const id = await newEvent(conn, { menuUrl: undefined });
+  assert.equal((await db.getEvent(conn, id)).menu_url, null);
   conn.close();
 });
 

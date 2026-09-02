@@ -33,20 +33,29 @@ export function createTestDb() {
   };
 }
 
+/**
+ * node:sqlite が返す行は素の JS オブジェクトとは限らない（プロトタイプが無い）。
+ * D1 は JSON 由来の普通のオブジェクトを返すので、詰め替えて形を揃える。
+ */
+const plain = (row) => (row == null ? null : { ...row });
+
 /** bind() は自分を書き換えず新しい文を返す。D1 と同じく使い回せる */
 function statement(stmt, args) {
+  // 1行だけ欲しいときも all() を使う。行の詰め替えが1箇所で済む
+  const rows = () => stmt.all(...args).map(plain);
+
   return {
     bind: (...next) => statement(stmt, next),
 
     /** 1行目。無ければ null。列名を渡すとその値だけ */
     async first(column) {
-      const row = stmt.get(...args) ?? null;
+      const row = rows()[0] ?? null;
       if (column === undefined || row === null) return row;
       return row[column] ?? null;
     },
 
     async all() {
-      return { results: stmt.all(...args), success: true, meta: {} };
+      return { results: rows(), success: true, meta: {} };
     },
 
     async run() {
