@@ -64,12 +64,29 @@ npm run db:apply:remote        # 本番の D1 にテーブルを作る（ロー�
 保存を押すと Discord が疎通確認を投げてくる。**署名検証が通らないと保存できない**。
 ここが最初の関門で、`src/index.ts` には通る実装が入っている。
 
-### 4. ローカル開発
+### 4. スラッシュコマンドを登録する
+
+コマンドは Discord 側に登録しないとメッセージ欄に出てこない。
+
+```bash
+cp .dev.vars.example .dev.vars   # APPLICATION ID と Bot トークンを書く
+npm run register                 # /bento と /bento-setup を登録
+```
+
+グローバル登録は反映に最大1時間かかる。開発中は `.dev.vars` の `DISCORD_GUILD_ID` に
+テスト用サーバーの ID を入れると、そのサーバーにだけ即時反映される
+（サーバー名を右クリック →「サーバーIDをコピー」。開発者モードが要る）。
+
+定義は `scripts/register-commands.mjs` の `COMMANDS`。PUT の一括上書きなので、
+**何度実行してもコマンドは重複しない**。定義から消せば Discord 側からも消える。
+
+### 5. ローカル開発
 
 ```bash
 cp .dev.vars.example .dev.vars   # DISCORD_PUBLIC_KEY / DISCORD_BOT_TOKEN を書く
 npm run dev                      # http://127.0.0.1:8787
 node --test test/interaction.test.mjs   # 署名検証の自己チェック（別ターミナルで dev 起動中に）
+node --test test/register-commands.test.mjs   # コマンド定義の自己チェック
 ```
 
 Discord から手元へ届かせたい場合は `cloudflared tunnel --url http://127.0.0.1:8787` などで
@@ -162,6 +179,7 @@ VS Code なら拡張機能「Biome」を入れるだけで動く。
 |---|---|
 | Interactions Endpoint URL が保存できない | 署名検証が通っていない。`req.text()` より先に `req.json()` を呼んでいないか、`DISCORD_PUBLIC_KEY` が本番に登録されているか |
 | 本番だけ `no such table` | `npm run db:apply:remote` を打っていない |
+| `/bento` が候補に出てこない | `npm run register` を打っていない。グローバル登録は反映に最大1時間かかるので、開発中は `DISCORD_GUILD_ID` を指定する |
 | Bot が「アプリケーションが応答しませんでした」 | 3秒を超えている。`type: 5` を先に返す形に変える |
 | `env.DB is undefined` | `wrangler.jsonc` の `database_id` が `PLACEHOLDER` のまま |
 | 型が古い | `npm run types`（`wrangler types` の生成物が `worker-configuration.d.ts`） |
@@ -174,6 +192,7 @@ VS Code なら拡張機能「Biome」を入れるだけで動く。
 |---|---|
 | `npm run dev` | ローカルで Worker を起動（127.0.0.1:8787） |
 | `npm run deploy` | Cloudflare にデプロイ |
+| `npm run register` | スラッシュコマンドを Discord に登録（一括上書き。重複しない） |
 | `npm run db:create` | D1 データベースを作る（初回だけ） |
 | `npm run db:new -- <名前>` | 空のマイグレーションファイルを作る |
 | `npm run db:apply` | ローカルの D1 にマイグレーションを適用 |
