@@ -9,12 +9,12 @@
     "ignoreUnknown": true,
     "includes": [
       "**",
-      "!**/node_modules/**",
-      "!.wrangler/**",
+      "!**/node_modules",
+      "!.wrangler",
       "!worker-configuration.d.ts",
       "!package-lock.json",
-      "!specs/**",
-      "!docs/**"
+      "!specs",
+      "!docs"
     ]
   },
   "formatter": {
@@ -26,7 +26,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "preset": "recommended"
     }
   },
   "javascript": {
