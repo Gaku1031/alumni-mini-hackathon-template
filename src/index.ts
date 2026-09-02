@@ -13,6 +13,7 @@ import {
   listOrders,
   setMessageId,
   setOrder,
+  setPaid,
 } from "./db";
 import type { ModalRow } from "./discord";
 import {
@@ -48,6 +49,10 @@ const CREATE_MODAL = "create_event";
 /** `[頼む ▼]` のセレクト */
 const ORDER_SELECT = "order_select";
 
+/** 集金フェーズの `[支払った]` と `[未払いに戻す ▼]` */
+const PAID = "paid";
+const UNPAID_SELECT = "unpaid_select";
+
 /** 使う分だけ。Discord の payload を全部写しても読めるものは増えない */
 type DiscordUser = { id: string; username: string; global_name?: string | null };
 
@@ -63,7 +68,7 @@ type Interaction = {
     custom_id?: string;
     /** Modal の入力欄。ACTION_ROW の中に1つずつ入っている */
     components?: ModalRow[];
-    /** セレクトで選ばれた option の value */
+    /** セレクトで選ばれた value。1つだけ選ばせるので実質1件 */
     values?: string[];
   };
   member?: { nick?: string | null; user: DiscordUser };
@@ -270,6 +275,14 @@ async function placeOrder(
   await patchMessage(env.DISCORD_BOT_TOKEN, event.channel_id, messageId, body);
 }
 
+/** 集金フェーズの1枚を貼り替える。paid が動くたびにここを通るので、集金 n/m が必ず追いつく */
+async function refreshClosed(env: Env, event: BentoEvent, messageId: string): Promise<void> {
+  const orders = await listOrders(env.DB, event.id);
+  const paypayUrl = await getPaypayUrl(env.DB, event.guild_id);
+  const body = renderClosed(event, splitShared(event.shared_costs, orders), paypayUrl);
+  await patchMessage(env.DISCORD_BOT_TOKEN, event.channel_id, messageId, body);
+}
+
 /**
  * `[頼む ▼]` で既出の品を選んだ。addOrder と違って2回目を拒まず、選び直しは入れ替える。
  * 締め切り済みかどうかはここで見る。ack で返してしまうと拒否を伝える先が無くなる
@@ -301,6 +314,37 @@ async function handleOrderSelect(
 }
 
 /**
+ * `[支払った]` と `[未払いに戻す ▼]`。どの注文を動かすか決めたあとは同じなのでまとめてある。
+ *
+ * PayPay の送金は本人がその場で終わらせる行為なので、`[支払った]` は自己申告で足りる
+ * （押した本人の分しか立てられない）。戻す側は齟齬を直すためのものなので、
+ * 誰でも・誰の分でも選べる。
+ */
+async function togglePaid(
+  interaction: Interaction,
+  env: Env,
+  ctx: ExecutionContext,
+  paid: boolean,
+): Promise<Response> {
+  const messageId = interaction.message?.id ?? "";
+  const event = await getEventByMessage(env.DB, messageId);
+  if (!event) return reply("この集計メッセージのイベントが見つかりません");
+
+  // 選ばれた id は Discord 越しに来た文字列でしかない。このイベントの注文かどうかここで見る
+  const orders = await listOrders(env.DB, event.id);
+  const target = paid
+    ? orders.find((order) => order.discord_user_id === actor(interaction).id)
+    : orders.find((order) => order.id === interaction.data?.values?.[0]);
+  if (!target) {
+    return reply(paid ? "この弁当は頼んでいないようです" : "その注文は見つかりません");
+  }
+
+  // すでに同じ状態でも黙って上書きする（二度押しで壊れないほうが押す側は気が楽）
+  await setPaid(env.DB, target.id, paid);
+  return ackUpdate(ctx, () => refreshClosed(env, event, messageId));
+}
+
+/**
  * 署名検証を通ったあとの本体。押されたものごとに分岐する。
  * 署名の検証と切り離してあるので、この関数は interaction をそのまま渡せばテストできる。
  */
@@ -323,6 +367,8 @@ export async function handleInteraction(
       // Modal は deferred できない。DB を触らず、あとで引けるように
       // 元メッセージの id だけ持たせて即返す
       if (customId === NEW_ITEM) return modal(newItemModal(interaction.message?.id ?? ""));
+      if (customId === PAID) return togglePaid(interaction, env, ctx, true);
+      if (customId === UNPAID_SELECT) return togglePaid(interaction, env, ctx, false);
       // 締め切り自体はまだしない（窓が開いただけで status が変わると、閉じただけで締まってしまう）
       if (customId === CLOSE && interaction.message) {
         return modal(renderCloseModal(interaction.message.id));
