@@ -6,6 +6,7 @@
 import type { BentoEvent } from "./db";
 import {
   addOrder,
+  closeEvent,
   createEvent,
   getEventByMessage,
   getPaypayUrl,
@@ -16,6 +17,7 @@ import {
 import type { ModalRow } from "./discord";
 import {
   ackUpdate,
+  deferred,
   modal,
   modalBody,
   modalValues,
@@ -24,8 +26,8 @@ import {
   postMessage,
   reply,
 } from "./discord";
-import { newItemModal, renderClosed, renderOpen } from "./render";
-import { splitShared } from "./split";
+import { CLOSE_MODAL, newItemModal, renderCloseModal, renderClosed, renderOpen } from "./render";
+import { parseSharedCosts, splitShared } from "./split";
 
 /** Discord が送ってくる interaction type のうち、使うものだけ */
 const PING = 1;
@@ -35,6 +37,9 @@ const MODAL_SUBMIT = 5;
 
 /** `[新しく入力]` のボタンと、そこから開く Modal（`new_item:<元メッセージ id>`） */
 const NEW_ITEM = "new_item";
+
+/** `[締め切る]` ボタン。押されたら締め切りはせず、共通費用の Modal をまず開く */
+const CLOSE = "close";
 
 /** `/bento` で開く Modal。送信されたときにこの custom_id で戻ってくる */
 const CREATE_MODAL = "create_event";
@@ -51,6 +56,7 @@ type Interaction = {
   type: number;
   guild_id?: string;
   channel_id?: string;
+  message?: { id: string };
   data?: {
     name?: string;
     custom_id?: string;
@@ -59,7 +65,6 @@ type Interaction = {
     /** セレクトで選ばれた value。1つだけ選ばせるので実質1件 */
     values?: string[];
   };
-  message?: { id: string };
   member?: { nick?: string | null; user: DiscordUser };
   user?: DiscordUser;
 };
@@ -114,6 +119,40 @@ function parsePrice(input: string): number | null {
     .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
     .replace(/[¥￥,、\s円]/g, "");
   return /^\d+$/.test(digits) ? Number(digits) : null;
+}
+
+/**
+ * 締め切りの本体。D1 の読み書きと Discord API が2本挟まって3秒に入らないので、
+ * deferred から呼んで waitUntil に載せる。
+ *
+ * @here は「締め切りが通った回」だけ流す。closeEvent が open の行しか更新しないので、
+ * 2回目に押されても false が返り、通知も金額の上書きもここで止まる。
+ */
+async function finishClose(env: Env, messageId: string, input: string): Promise<void> {
+  const event = await getEventByMessage(env.DB, messageId);
+  if (!event) return;
+
+  const parsed = parseSharedCosts(input);
+  const closed = await closeEvent(env.DB, event.id, parsed);
+  // 締め切れなかった（すでに closed）なら、入力は捨てて焼き込み済みの金額で描く
+  const sharedCosts = closed ? parsed : event.shared_costs;
+
+  const orders = await listOrders(env.DB, event.id);
+  const paypayUrl = await getPaypayUrl(env.DB, event.guild_id);
+  const body = renderClosed(
+    { ...event, shared_costs: sharedCosts },
+    splitShared(sharedCosts, orders),
+    paypayUrl,
+  );
+  await patchMessage(env.DISCORD_BOT_TOKEN, event.channel_id, messageId, body);
+
+  if (!closed) return;
+  const link = `https://discord.com/channels/${event.guild_id}/${event.channel_id}/${messageId}`;
+  await postMessage(env.DISCORD_BOT_TOKEN, event.channel_id, {
+    content: `@here 「${event.title}」を締め切りました。集金を始めます。\n${link}`,
+    // @here だけ鳴らす。タイトルに名前や役職が入っていても本人には飛ばさない
+    allowed_mentions: { parse: ["everyone"] },
+  });
 }
 
 /**
@@ -270,11 +309,21 @@ export async function handleInteraction(
       if (customId === NEW_ITEM) return modal(newItemModal(interaction.message?.id ?? ""));
       if (customId === PAID) return togglePaid(interaction, env, ctx, true);
       if (customId === UNPAID_SELECT) return togglePaid(interaction, env, ctx, false);
+      // 締め切り自体はまだしない（窓が開いただけで status が変わると、閉じただけで締まってしまう）
+      if (customId === CLOSE && interaction.message) {
+        return modal(renderCloseModal(interaction.message.id));
+      }
       return reply("未実装");
 
     case MODAL_SUBMIT:
       if (customId === CREATE_MODAL) return handleModal(interaction, env, ctx);
       if (customId.startsWith(`${NEW_ITEM}:`)) return handleNewItem(interaction, env, ctx);
+      if (customId.startsWith(CLOSE_MODAL)) {
+        const messageId = customId.slice(CLOSE_MODAL.length);
+        // 入力欄は1つだけなので、行と入力を辿って値をそのまま取る
+        const input = interaction.data?.components?.[0]?.components?.[0]?.value ?? "";
+        return deferred(ctx, () => finishClose(env, messageId, input));
+      }
       return reply("未実装");
 
     default:
