@@ -12,10 +12,12 @@ import {
   getPaypayUrl,
   listOrders,
   setMessageId,
+  setOrder,
   setPaid,
 } from "./db";
 import type { ModalRow } from "./discord";
 import {
+  ack,
   ackUpdate,
   deferred,
   modal,
@@ -26,7 +28,7 @@ import {
   postMessage,
   reply,
 } from "./discord";
-import { CLOSE_MODAL, newItemModal, renderCloseModal, renderClosed, renderOpen } from "./render";
+import { CLOSE_MODAL, newItemModal, renderClosed, renderCloseModal, renderOpen } from "./render";
 import { parseSharedCosts, splitShared } from "./split";
 
 /** Discord が送ってくる interaction type のうち、使うものだけ */
@@ -44,6 +46,9 @@ const CLOSE = "close";
 /** `/bento` で開く Modal。送信されたときにこの custom_id で戻ってくる */
 const CREATE_MODAL = "create_event";
 
+/** `[頼む ▼]` のセレクト */
+const ORDER_SELECT = "order_select";
+
 /** 集金フェーズの `[支払った]` と `[未払いに戻す ▼]` */
 const PAID = "paid";
 const UNPAID_SELECT = "unpaid_select";
@@ -56,6 +61,7 @@ type Interaction = {
   type: number;
   guild_id?: string;
   channel_id?: string;
+  /** ボタン・セレクト・Modal から分かるのは押されたメッセージの id だけ */
   message?: { id: string };
   data?: {
     name?: string;
@@ -246,12 +252,65 @@ async function handleNewItem(
   });
 }
 
+/** `[頼む ▼]` の value は `650:唐揚げ弁当`。品名に ":" が入っていても最初の1個で割れる */
+function parseItem(value: string): { itemName: string; price: number } | null {
+  const at = value.indexOf(":");
+  if (at < 0) return null;
+  const price = Number.parseInt(value.slice(0, at), 10);
+  const itemName = value.slice(at + 1);
+  if (!Number.isInteger(price) || itemName === "") return null;
+  return { itemName, price };
+}
+
+/** 注文を1件入れて、集計メッセージを描き直す。ここが `[頼む ▼]` の実体 */
+async function placeOrder(
+  env: Env,
+  event: BentoEvent,
+  messageId: string,
+  input: { discordUserId: string; displayName: string; itemName: string; price: number },
+): Promise<void> {
+  await setOrder(env.DB, { eventId: event.id, ...input });
+  const orders = await listOrders(env.DB, event.id);
+  const body = renderOpen(event, orders);
+  await patchMessage(env.DISCORD_BOT_TOKEN, event.channel_id, messageId, body);
+}
+
 /** 集金フェーズの1枚を貼り替える。paid が動くたびにここを通るので、集金 n/m が必ず追いつく */
 async function refreshClosed(env: Env, event: BentoEvent, messageId: string): Promise<void> {
   const orders = await listOrders(env.DB, event.id);
   const paypayUrl = await getPaypayUrl(env.DB, event.guild_id);
   const body = renderClosed(event, splitShared(event.shared_costs, orders), paypayUrl);
   await patchMessage(env.DISCORD_BOT_TOKEN, event.channel_id, messageId, body);
+}
+
+/**
+ * `[頼む ▼]` で既出の品を選んだ。addOrder と違って2回目を拒まず、選び直しは入れ替える。
+ * 締め切り済みかどうかはここで見る。ack で返してしまうと拒否を伝える先が無くなる
+ */
+async function handleOrderSelect(
+  interaction: Interaction,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const item = parseItem(interaction.data?.values?.[0] ?? "");
+  const messageId = interaction.message?.id;
+  const who = actor(interaction);
+  if (!item || !messageId || who.id === "unknown") return reply("注文できませんでした。");
+
+  // D1 の読み1回なら3秒に収まる
+  const event = await getEventByMessage(env.DB, messageId);
+  if (!event) return reply("この募集は見つかりませんでした。");
+  if (event.status === "closed") return reply("この募集はもう締め切られています。");
+
+  // 書き込みと Discord への PATCH は待たない
+  ctx.waitUntil(
+    placeOrder(env, event, messageId, {
+      discordUserId: who.id,
+      displayName: who.name,
+      ...item,
+    }),
+  );
+  return ack();
 }
 
 /**
@@ -304,6 +363,7 @@ export async function handleInteraction(
       return handleCommand(interaction);
 
     case MESSAGE_COMPONENT:
+      if (customId === ORDER_SELECT) return handleOrderSelect(interaction, env, ctx);
       // Modal は deferred できない。DB を触らず、あとで引けるように
       // 元メッセージの id だけ持たせて即返す
       if (customId === NEW_ITEM) return modal(newItemModal(interaction.message?.id ?? ""));

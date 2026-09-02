@@ -33,6 +33,14 @@ const INSERT_ORDER = `insert into bento_orders
 values (?, ?, ?, ?, ?, ?)
 on conflict (event_id, discord_user_id) do nothing`;
 
+// `[頼む ▼]` は選び直しも兼ねる。行を増やさずに中身だけ入れ替える。
+// created_at は触らないので、選び直しても表示の並びは最初に頼んだ位置のまま
+const UPSERT_ORDER = `insert into bento_orders
+(id, event_id, discord_user_id, display_name, item_name, price)
+values (?, ?, ?, ?, ?, ?)
+on conflict (event_id, discord_user_id) do update
+set display_name = excluded.display_name, item_name = excluded.item_name, price = excluded.price`;
+
 const DELETE_ORDER = `delete from bento_orders where id = ?`;
 
 const UPDATE_PAID = `update bento_orders set paid = ? where id = ?`;
@@ -165,6 +173,27 @@ export async function addOrder(
 /** 1人1個の unique 制約に当たったか。D1 は "D1_ERROR: UNIQUE constraint failed: ..." で来る */
 function isUniqueViolation(error: unknown): boolean {
   return error instanceof Error && /unique constraint failed/i.test(error.message);
+}
+
+/**
+ * `[頼む ▼]` からの注文。addOrder と違って2回目を拒まない。
+ * 選び直しは「打ち間違いの訂正」なので、拒否するより入れ替えるほうが手数が少ない。
+ */
+export async function setOrder(
+  db: D1Database,
+  input: {
+    eventId: string;
+    discordUserId: string;
+    displayName: string;
+    itemName: string;
+    price: number;
+  },
+): Promise<void> {
+  const { eventId, discordUserId, displayName, itemName, price } = input;
+  await db
+    .prepare(UPSERT_ORDER)
+    .bind(crypto.randomUUID(), eventId, discordUserId, displayName, itemName, price)
+    .run();
 }
 
 /** 消せたら true。取り消しは誰でも押せるので、既に消えていることがある */

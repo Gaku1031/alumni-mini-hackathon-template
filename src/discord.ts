@@ -92,6 +92,15 @@ export function reply(content: string): Response {
   return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
 }
 
+/**
+ * 押されたことだけ受け取って、その場には何も出さない応答（ボタン／セレクト用）。
+ * 見た目は元メッセージの patchMessage で変わるので、type:5 のように
+ * 「考え中…」を出してしまうと、消えない吹き出しが残る。
+ */
+export function ack(): Response {
+  return json({ type: DEFERRED_UPDATE_MESSAGE });
+}
+
 /** Modal に置くテキスト欄1つぶん */
 export type TextField = {
   custom_id: string;
