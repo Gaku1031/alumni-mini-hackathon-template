@@ -1,0 +1,97 @@
+/**
+ * Discord とのやりとりをまとめた薄い層。index.ts からはここだけを使う。
+ *
+ * 分かれているのは2種類:
+ *   - Interactions への「応答」(pong / reply / deferred)。Discord からの POST に返す Response
+ *   - Discord API を「こちらから叩く」(postMessage / patchMessage)。Bot Token が要る
+ */
+
+const API = "https://discord.com/api/v10";
+
+/** 返す interaction response type */
+const PONG = 1;
+const CHANNEL_MESSAGE = 4;
+const DEFERRED_CHANNEL_MESSAGE = 5;
+
+/** 本人にしか見えないメッセージ */
+const EPHEMERAL = 64;
+
+export type MessageBody = Record<string, unknown>;
+
+/** Discord API が 2xx 以外を返したとき。status で握り分けられるようにしておく */
+export class DiscordApiError extends Error {
+  status: number;
+  body: string;
+
+  constructor(status: number, body: string) {
+    super(`Discord API ${status}: ${body}`);
+    this.name = "DiscordApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+/**
+ * Bot Token は Authorization ヘッダにだけ載せる。ボディには絶対に入れない。
+ * 失敗を握りつぶすと「押したのに何も起きない」になるので、必ず投げる。
+ */
+async function call(token: string, path: string, method: string, body: MessageBody) {
+  const res = await fetch(`${API}${path}`, {
+    method,
+    headers: {
+      authorization: `Bot ${token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new DiscordApiError(res.status, await res.text());
+  return (await res.json()) as { id: string };
+}
+
+/** チャンネルに投稿する。あとで patchMessage するために message id を返す */
+export async function postMessage(
+  token: string,
+  channelId: string,
+  body: MessageBody,
+): Promise<string> {
+  const message = await call(token, `/channels/${channelId}/messages`, "POST", body);
+  return message.id;
+}
+
+/** 投稿済みメッセージを差し替える（注文の集計を貼り替えるのに使う） */
+export async function patchMessage(
+  token: string,
+  channelId: string,
+  messageId: string,
+  body: MessageBody,
+): Promise<void> {
+  await call(token, `/channels/${channelId}/messages/${messageId}`, "PATCH", body);
+}
+
+function json(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** PING への応答 */
+export function pong(): Response {
+  return json({ type: PONG });
+}
+
+/** その場で返せる短い返事。押した本人にしか見せない */
+export function reply(content: string): Response {
+  return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+}
+
+/**
+ * Discord は3秒で切る。D1 の読み書きや API 呼び出しが挟まる操作はこれで返す。
+ * type:5 を即返して「考え中」を出させ、続きは waitUntil に載せる
+ * （Response を返したあとも Worker は work が終わるまで生かされる）。
+ *
+ * work は await しない。ここで待つと3秒制限に戻ってしまう。
+ */
+export function deferred(ctx: ExecutionContext, work: () => Promise<unknown>): Response {
+  ctx.waitUntil(work());
+  return json({ type: DEFERRED_CHANNEL_MESSAGE });
+}
