@@ -7,7 +7,7 @@
  */
 
 import type { MessageBody } from "./discord";
-import { type SharedCost, splitShared } from "./split";
+import type { SharedCost, Split } from "./split";
 
 /** bento_orders の1行のうち、描画に要る分だけ */
 export type Order = {
@@ -151,15 +151,18 @@ function paymentLine(group: ItemGroup, perPerson: number): string {
 /**
  * 集金フェーズの集計メッセージ。
  *
+ * 金額は splitShared の結果をそのまま受け取る。ここで割り算をやり直さないので、
+ * 表示と計算がずれない（このファイルは値の import を持たない描画専用のまま）。
+ *
  * 未払い者は名前で並べるが、@メンションは絶対に入れない。
  * 通知が飛ぶと催促になって角が立つ。「見れば分かるが、鳴らない」が設計上の強度。
  */
 export function renderClosed(
   event: ClosedEvent,
-  orders: ClosedOrder[],
+  split: Split<ClosedOrder>,
   paypayUrl?: string | null,
 ): MessageBody {
-  const { perPerson, surplus } = splitShared(event.shared_costs, orders);
+  const { perPerson, surplus, payments: orders } = split;
   const groups = groupByItem(orders);
   const bento = orders.reduce((sum, order) => sum + order.price, 0);
   const shared = event.shared_costs.reduce((sum, cost) => sum + cost.amount, 0);
