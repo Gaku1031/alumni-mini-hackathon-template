@@ -1,0 +1,4 @@
+# Discord Developer Portal > General Information > Public Key
+DISCORD_PUBLIC_KEY=
+# Bot > Token（集計メッセージを PATCH するのに使う）
+DISCORD_BOT_TOKEN=

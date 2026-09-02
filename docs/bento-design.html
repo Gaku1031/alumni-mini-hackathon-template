@@ -1,0 +1,496 @@
+<meta charset="utf-8">
+<title>お弁当注文Bot</title>
+<style>
+/* html-report-design 準拠。構造は余白と文字の階層で作る。線と箱で作らない */
+:root{
+  --ink:#1a1a1a; --ink-2:#555555; --ink-3:#8e8e8e;
+  --accent:#173f66; --accent-tint:#eef3f8;
+  --hairline:#d9d9d9; --fill-gray:#e7e9ec; --paper:#ffffff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Hiragino Kaku Gothic ProN","Yu Gothic",monospace;
+}
+html{color-scheme:light}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic Medium","Yu Gothic",Meiryo,sans-serif;
+  font-size:15px;line-height:1.9;border-top:6px solid var(--accent);
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:780px;margin:0 auto;padding:56px clamp(20px,6vw,48px) 96px}
+
+.doc-header{padding-bottom:28px;border-bottom:1px solid var(--ink)}
+.eyebrow{font-size:11px;letter-spacing:.16em;color:var(--ink-3);text-transform:uppercase;margin:0 0 20px}
+h1{font-size:27px;line-height:1.5;letter-spacing:.02em;margin:0 0 12px;font-feature-settings:"palt" 1;text-wrap:balance}
+.lead{font-size:14px;color:var(--ink-2);margin:0 0 24px;max-width:38em}
+.doc-meta{font-size:12px;color:var(--ink-3);display:flex;gap:24px;flex-wrap:wrap}
+
+.page>section{border-top:1px solid var(--hairline);padding-top:44px;margin-top:64px}
+.page>section:first-of-type{border-top:0;padding-top:0;margin-top:56px}
+h2{font-size:19px;letter-spacing:.03em;margin:0;font-feature-settings:"palt" 1}
+h2 .no{color:var(--accent);margin-right:14px;font-variant-numeric:tabular-nums}
+.msg{font-size:16px;font-weight:600;line-height:1.8;margin:18px 0 24px;max-width:36em}
+h3{font-size:15px;margin:36px 0 8px}
+p{margin:0 0 16px;max-width:42em}
+strong{font-weight:700}
+
+ul,ol{margin:0 0 16px;padding-left:1.4em;max-width:41em}
+li{margin-bottom:6px}
+ul{list-style:none;padding-left:1.2em}
+ul li::before{content:"–";float:left;margin-left:-1.2em;color:var(--ink-3)}
+
+.summary{list-style:none;margin:24px 0 0;padding:0;counter-reset:s;max-width:44em}
+.summary li{counter-increment:s;position:relative;padding-left:2.4em;margin-bottom:14px}
+.summary li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.4em;
+  font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em;font-variant-numeric:tabular-nums}
+.summary li::marker{content:none}
+
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin:28px 0 8px;font-size:13px;line-height:1.7}
+caption{text-align:left;font-size:12.5px;font-weight:600;margin-bottom:10px}
+th{font-size:12px;font-weight:600;text-align:left;padding:10px 12px;
+  border-top:2px solid var(--ink);border-bottom:1px solid var(--ink);vertical-align:bottom}
+td{padding:10px 12px;border-bottom:1px solid var(--hairline);vertical-align:top}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.total td{border-top:1px solid var(--ink);border-bottom:2px solid var(--ink);
+  font-weight:600;background:var(--accent-tint)}
+
+figure{margin:32px 0 8px}
+figcaption{font-size:12.5px;font-weight:600;margin-bottom:14px}
+figure svg{width:100%;height:auto;display:block}
+svg text{font-family:inherit}
+.fig-scroll{overflow-x:auto}
+.src{font-size:11.5px;color:var(--ink-3);margin:6px 0 0}
+.note{font-size:12.5px;color:var(--ink-2);border-left:2px solid var(--accent);
+  padding:2px 0 2px 14px;margin:24px 0 16px;max-width:40em}
+
+/* Discord のメッセージ再現。ここだけは面を持たせる（実物のUIだから） */
+.mock{font-family:var(--mono);font-size:12px;line-height:1.85;white-space:pre;
+  background:var(--accent-tint);padding:18px 20px;margin:24px 0 8px;overflow-x:auto;
+  border-left:3px solid var(--accent)}
+.mock b{font-weight:700;color:var(--accent)}
+code{font-family:var(--mono);font-size:.88em;background:var(--fill-gray);padding:1px 5px}
+pre{font-family:var(--mono);font-size:12px;line-height:1.75;background:var(--fill-gray);
+  padding:16px 18px;margin:20px 0 8px;overflow-x:auto}
+pre code{background:none;padding:0;font-size:inherit}
+
+.chevrons{display:flex;margin:28px 0 8px;min-width:600px}
+.chev{flex:1;padding:10px 10px 10px 22px;font-size:12px;font-weight:600;line-height:1.5;
+  text-align:center;background:var(--fill-gray);margin-left:4px;
+  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%,12px 50%)}
+.chev:first-child{margin-left:0;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%)}
+.chev.on{background:var(--accent);color:#fff}
+.chev small{display:block;font-size:10.5px;font-weight:500;opacity:.8}
+
+dl.glossary{margin:24px 0 8px;max-width:44em}
+dl.glossary dt{font-weight:700;font-size:13.5px;margin-top:18px}
+dl.glossary dd{margin:2px 0 0;font-size:13.5px;color:var(--ink-2);line-height:1.8}
+
+@media print{body{border-top-width:4px}.page{padding-top:32px}}
+</style>
+
+<div class="page">
+
+<header class="doc-header">
+  <p class="eyebrow">Alumni Mini Hackathon / 設計資料</p>
+  <h1>お弁当注文Bot ― Discord だけで完結する注文と集金</h1>
+  <p class="lead">アルムナイの弁当注文を、Webサイトを一切開かずに Discord のメッセージ1枚で完結させる。この資料は「何を作るか」と「なぜその形なのか」を、Discord Bot を書いたことがない人にも分かるようにまとめたもの。</p>
+  <div class="doc-meta">
+    <span>2026-09-02</span>
+    <span>Cloudflare Workers / D1</span>
+    <span>認証なし・ストレージなし・無料枠</span>
+  </div>
+</header>
+
+<section>
+  <h2><span class="no">00</span>この資料の結論</h2>
+  <ol class="summary">
+    <li><strong>作るのは「1枚の生きたメッセージ」。</strong> Discord のチャンネルに貼られたメッセージが、注文が入るたびに自動で書き換わる。誰も Web サイトを開かない。ログインもしない。</li>
+    <li><strong>Googleフォームに勝てるのはこの一点だけ。</strong> フォームは回答したあと結果が見えない。この Bot は、スクロールしただけで「誰が何を頼んだか」「誰がまだ払っていないか」が全員に見える。</li>
+    <li><strong>作らないものを、作るものと同じだけ決めた。</strong> 認証・Webページ・メニュー登録・締切の自動判定・権限管理・AI。全部いらないと結論した。残ったのは Discord からの通信を受ける API 1本と、テーブル3つ。</li>
+  </ol>
+  <p class="note">この資料は設計の合意事項をまとめたもの。実装手順の詳細は同リポジトリの <code>grill-bento-order-20260902.md</code> に置いてある。</p>
+</section>
+
+<section>
+  <h2><span class="no">01</span>完成形</h2>
+  <p class="msg">製品のすべてが、この1枚のメッセージに収まっている。画面遷移も、ログイン画面も、マイページも存在しない。</p>
+
+  <p>幹事が <code>/bento</code> と打つと、チャンネルにこのメッセージが投稿される。あとは全員がボタンを押すだけ。</p>
+
+<div class="mock"><b>📌 9/15(月) お弁当</b>
+📎 メニュー: https://tenpo.example.com/bento
+
+🍱 唐揚げ弁当  ¥650   ×3   gaku, taro, hana
+🍱 のり弁      ¥480   ×2   jiro, saki
+🍱 幕の内      ¥820   ×1   kenta
+────────────────────────────────
+弁当代 ¥4,310
+
+ [ 頼む ▼ ]  [ 新しく入力 ]  [ 取り消す ▼ ]  [ 締め切る ]</div>
+  <p class="src">図1: 注文フェーズの集計メッセージ。誰かが注文するたびに Bot がこのメッセージ自体を書き換える（新しいメッセージを投稿するのではない）。</p>
+
+  <p>幹事が <code>[ 締め切る ]</code> を押すと、配送料を入力する小さな入力欄が開く。そこで金額が確定し、メッセージが集金モードに切り替わる。</p>
+
+<div class="mock"><b>📌 9/15(月) お弁当</b>
+
+🍱 唐揚げ弁当  ¥650 + ¥84 = <b>¥734</b>   ×3   gaku, taro, hana
+🍱 のり弁      ¥480 + ¥84 = <b>¥564</b>   ×2   jiro, saki
+🍱 幕の内      ¥820 + ¥84 = <b>¥904</b>   ×1   kenta
+────────────────────────────────
+弁当代 ¥4,310 ＋ 配送料 ¥500 = ¥4,810
+配送料は6人で均等割 → ¥84（端数切り上げ・余り¥4は幹事）
+
+💰 集金 4/6      未払い: jiro, saki
+送金先 → https://paypay.me/xxxx
+
+ [ 支払った ]  [ 未払いに戻す ▼ ]</div>
+  <p class="src">図2: 集金フェーズ。<strong>配送料は均等割だが、弁当の値段が違うので各自の支払額は全員バラバラ。</strong>だから行ごとに実際に送る金額を書く。暗算させない。</p>
+</section>
+
+<section>
+  <h2><span class="no">02</span>なぜ Googleフォームではないのか</h2>
+  <p class="msg">同じ機能はフォームで15分で作れる。だから「フォームに構造的にできないこと」を1つ選んで、そこに全部を賭けた。</p>
+
+  <p>弁当の幹事が実際に面倒なのは、次の4つ。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表1: 幹事の手間と、フォームで解けるかどうか</caption>
+    <thead><tr><th style="width:34%">面倒なこと</th><th style="width:22%">フォームで解けるか</th><th>この Bot はどうするか</th></tr></thead>
+    <tbody>
+      <tr><td>注文の取りまとめ<br>（「私A弁当」がチャットに散らばる）</td><td>解ける</td><td>同じく解ける（差はつかない）</td></tr>
+      <tr><td>店に出す最終オーダー<br>（「A弁当7個、B弁当3個」の形にする）</td><td>半分。スプレッドシートで手集計</td><td>常に集計済みの状態で表示されている</td></tr>
+      <tr><td>集金の追い込み<br>（未払いを一人ずつ追いかける）</td><td><strong>解けない</strong></td><td><strong>未払いが全員に見えている</strong></td></tr>
+      <tr><td>結果を全員に見せる</td><td><strong>解けない</strong>（回答後は自分の分すら見えない）</td><td><strong>チャンネルを見れば常に最新</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>勝ち筋は下2つ。とくに「未払いが全員に見えている」は、<strong>幹事が一番やりたくない仕事（人にお金の催促をする）を、機械の状態表示に置き換える</strong>という意味を持つ。ここがこの道具の存在理由。</p>
+
+  <p class="note">ただし、未払い者に <code>@メンション</code> で通知は飛ばさない。通知を飛ばすと「取り立て」になって角が立つ。<strong>見れば分かるが、鳴らない。</strong>この強度が最適だと判断した。</p>
+</section>
+
+<section>
+  <h2><span class="no">03</span>ログインしないのに、なぜ「誰が」が分かるのか</h2>
+  <p class="msg">Discord が本人確認を代行してくれている。だから認証を自分で作る必要がない。</p>
+
+  <p>ここが初めて Discord Bot を作る人が一番不思議に思うところなので、先に説明する。</p>
+
+  <p>誰かが Discord でボタンを押すと、Discord のサーバーから自分のサーバー（Cloudflare Workers）に <strong>HTTPリクエストが飛んでくる</strong>。その中身には、押した人の Discord ユーザーID と表示名が最初から入っている。</p>
+
+<pre><code>{
+  "type": 3,
+  "member": {
+    "user": { "id": "123456789012345678", "username": "gaku" }
+  },
+  "data": { "custom_id": "order_select", "values": ["唐揚げ弁当"] }
+}</code></pre>
+
+  <p>しかもこのリクエストには <strong>Discord の電子署名がついている</strong>。署名を検証すれば「本当に Discord から来たリクエストだ」と確認できるので、他人がユーザーIDを詐称して直接 API を叩くことはできない。</p>
+
+  <p><strong>つまり、ログイン画面もパスワードもセッションも作らずに、本人確認が完了している。</strong>「認証基盤なし」という制約は、この設計では制約ではなく前提条件になっている。</p>
+
+  <p class="note">むしろ「名前を手で入力してもらう」設計にすると、表記ゆれ（gaku / Gaku / がく）が起きて劣化する。Discord のユーザーIDは絶対に一意で、絶対に詐称できない。使わない手はない。</p>
+</section>
+
+<section>
+  <h2><span class="no">04</span>全体の仕組み</h2>
+  <p class="msg">動くのは「Discordからリクエストが飛んできた瞬間」だけ。常時動きつづけるサーバーは要らない。</p>
+
+  <figure>
+    <figcaption>図3: ボタンが押されてからメッセージが書き換わるまで</figcaption>
+    <div class="fig-scroll">
+    <svg viewBox="0 0 720 268" role="img" aria-label="参加者のボタン操作がDiscordを経由してCloudflare Workersに届き、D1を読み書きしてDiscordのメッセージを書き換えるまでの流れ">
+      <g font-size="12">
+        <!-- boxes -->
+        <rect x="8" y="56" width="136" height="72" fill="#e7e9ec"/>
+        <text x="76" y="86" text-anchor="middle" font-weight="700" fill="#1a1a1a">参加者</text>
+        <text x="76" y="106" text-anchor="middle" font-size="11" fill="#555555">Discordアプリ</text>
+
+        <rect x="200" y="56" width="136" height="72" fill="#e7e9ec"/>
+        <text x="268" y="86" text-anchor="middle" font-weight="700" fill="#1a1a1a">Discord</text>
+        <text x="268" y="106" text-anchor="middle" font-size="11" fill="#555555">署名をつけて転送</text>
+
+        <rect x="392" y="56" width="136" height="72" fill="#173f66"/>
+        <text x="460" y="86" text-anchor="middle" font-weight="700" fill="#ffffff">Cloudflare</text>
+        <text x="460" y="106" text-anchor="middle" font-size="11" fill="#ffffff" opacity="0.85">Workers（POST /）</text>
+
+        <rect x="584" y="56" width="136" height="72" fill="#e7e9ec"/>
+        <text x="652" y="86" text-anchor="middle" font-weight="700" fill="#1a1a1a">D1</text>
+        <text x="652" y="106" text-anchor="middle" font-size="11" fill="#555555">SQLite</text>
+
+        <!-- forward arrows -->
+        <line x1="144" y1="92" x2="192" y2="92" stroke="#173f66" stroke-width="1.5"/>
+        <path d="M192 92 L184 88 L184 96 Z" fill="#173f66"/>
+        <text x="168" y="44" text-anchor="middle" font-size="10.5" fill="#555555">ボタンを押す</text>
+
+        <line x1="336" y1="92" x2="384" y2="92" stroke="#173f66" stroke-width="1.5"/>
+        <path d="M384 92 L376 88 L376 96 Z" fill="#173f66"/>
+        <text x="360" y="36" text-anchor="middle" font-size="10.5" fill="#555555">誰が押したか</text>
+        <text x="360" y="48" text-anchor="middle" font-size="10.5" fill="#555555">＋署名</text>
+
+        <line x1="528" y1="92" x2="576" y2="92" stroke="#173f66" stroke-width="1.5"/>
+        <path d="M576 92 L568 88 L568 96 Z" fill="#173f66"/>
+        <text x="552" y="36" text-anchor="middle" font-size="10.5" fill="#555555">注文を保存</text>
+        <text x="552" y="48" text-anchor="middle" font-size="10.5" fill="#555555">全注文を読む</text>
+
+        <!-- return path -->
+        <path d="M460 128 L460 176 L268 176 L268 132" fill="none" stroke="#173f66" stroke-width="1.5" stroke-dasharray="4 4"/>
+        <path d="M268 128 L264 136 L272 136 Z" fill="#173f66"/>
+        <text x="364" y="196" text-anchor="middle" font-size="10.5" fill="#555555">集計しなおしたメッセージで上書きする</text>
+
+        <path d="M200 176 L76 176 L76 132" fill="none" stroke="#173f66" stroke-width="1.5" stroke-dasharray="4 4"/>
+        <path d="M76 128 L72 136 L80 136 Z" fill="#173f66"/>
+        <text x="76" y="220" text-anchor="middle" font-size="10.5" fill="#555555">全員の画面で</text>
+        <text x="76" y="236" text-anchor="middle" font-size="10.5" fill="#555555">同じ1枚が更新される</text>
+      </g>
+    </svg>
+    </div>
+    <p class="src">Worker が動くのは、リクエストが飛んできた数百ミリ秒だけ。しかも D1 は Worker から直接つながっていて、外に口がない。</p>
+  </figure>
+
+  <p>デプロイするのは <code>src/index.ts</code> <strong>ただ1ファイル</strong>の Worker。ブラウザで開く画面は作らない。ルーティングも要らないので、フレームワークも入れない。</p>
+
+  <p><strong>データベースが外から見えないことが、この構成の一番効いている点。</strong>D1 には URL も API キーも無く、<code>wrangler.jsonc</code> で紐づけた Worker から <code>env.DB</code> 経由でしか触れない。つまり<strong>署名検証を通らないリクエストは、そもそもデータベースに到達する経路を持たない</strong>。公開 API を持つデータベースだと、この「署名を迂回されない」を設定で守り続ける必要がある。</p>
+
+  <p class="note"><strong>初学者がハマる3点。</strong>（1）Discord は3秒以内に返事がないとタイムアウトするので、まず「考え中」を即返してから処理する。（2）署名検証には加工前の生の本文が要るので、<code>req.json()</code> より先に <code>req.text()</code> を呼ぶ。（3）D1 はローカル（<code>--local</code>）とリモート（<code>--remote</code>）で中身が別物。手元で通ったからといって本番のテーブルはできていない。</p>
+</section>
+
+<section>
+  <h2><span class="no">05</span>使う流れ</h2>
+  <p class="msg">スラッシュコマンドを打つのは幹事だけ。参加者は最初から最後までボタンしか押さない。</p>
+
+  <div class="fig-scroll">
+  <div class="chevrons">
+    <div class="chev">募集<small>幹事が /bento</small></div>
+    <div class="chev on">注文<small>全員がボタン</small></div>
+    <div class="chev">締切<small>幹事が [締め切る]</small></div>
+    <div class="chev on">集金<small>各自が [支払った]</small></div>
+    <div class="chev">完了<small>未払い 0 人</small></div>
+  </div>
+  </div>
+  <p class="src">図4: 5つのフェーズ。太い2つが参加者が触るところ。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表2: ボタンの一覧と権限</caption>
+    <thead><tr><th style="width:24%">ボタン</th><th style="width:14%">押せる人</th><th>動き</th></tr></thead>
+    <tbody>
+      <tr><td><code>[ 頼む ▼ ]</code></td><td>全員</td><td>すでに誰かが注文した品が並ぶ。1タップで同じものを注文。<strong>選択肢が0件のときは表示しない</strong></td></tr>
+      <tr><td><code>[ 新しく入力 ]</code></td><td>全員</td><td>品名と金額を入力する小窓が開く。最初の1人と、珍しいものを頼む人だけが使う</td></tr>
+      <tr><td><code>[ 取り消す ▼ ]</code></td><td>全員</td><td>全員の注文が並び、誰のでも消せる。金額の打ち間違いを直す手段も兼ねる</td></tr>
+      <tr><td><code>[ 締め切る ]</code></td><td>全員</td><td>配送料を入力する小窓が開く。<strong>小窓が開くこと自体が確認ステップになる</strong>ので誤爆しない</td></tr>
+      <tr><td><code>[ 支払った ]</code></td><td>本人</td><td>PayPay送金は本人がその場で完了させる行為なので、自己申告で信用できる</td></tr>
+      <tr><td><code>[ 未払いに戻す ▼ ]</code></td><td>全員</td><td>間違えて押した場合の戻し</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><strong>権限チェックのコードは1行も書かない。</strong>アルムナイの内輪で悪用される想定がないので、誰が誰の注文を消せてもいい。この判断ひとつで「幹事とは誰か」を管理する仕組みが丸ごと不要になった。</p>
+</section>
+
+<section>
+  <h2><span class="no">06</span>メニューを登録しないという判断</h2>
+  <p class="msg">幹事にメニューを入力させない。注文が積み上がると、選択肢が勝手に増えていく。</p>
+
+  <p>頼む店は毎回違う。だから幹事に毎回メニューを打ち込ませると、2回目で道具が捨てられる。かといって全員が自由テキストで書くと「唐揚げ弁当 / からあげ弁当 / 唐揚げ」が混ざって、店に出す発注が作れない。</p>
+
+  <p>解決策は、<strong>誰かが入力した品が、そのまま次の人の選択肢になる</strong>こと。</p>
+
+<div class="mock"><b>19:00</b>  幹事が /bento を叩いた直後
+        まだ注文がありません
+        [ 新しく入力 ]              ← 選択肢が空なので「頼む ▼」は出ない
+
+<b>19:05</b>  gaku が [新しく入力] → 「唐揚げ弁当 / 650」
+        🍱 唐揚げ弁当 ¥650  ×1  gaku
+        [ 頼む ▼ ] ← <b>唐揚げ弁当 ¥650 が選択肢として生まれた</b>
+        [ 新しく入力 ]
+
+<b>19:07</b>  taro も唐揚げ弁当。[頼む ▼] を開くともう入っている
+        🍱 唐揚げ弁当 ¥650  ×2  gaku, taro
+                                <b>taro は一文字も打っていない</b>
+
+<b>19:10</b>  hana はのり弁。まだ無いので [新しく入力]
+        🍱 唐揚げ弁当 ¥650  ×2  gaku, taro
+        🍱 のり弁     ¥480  ×1  hana
+        [ 頼む ▼ ] ← 選択肢が2つになった</div>
+  <p class="src">図5: 6人なら手入力は2〜3回。残りは全部タップで終わる。</p>
+
+  <p>表記ゆれが起きない理由は単純で、<strong>打つより押すほうが明らかに楽だから</strong>。すでにある品をわざわざ打ち直す人はいない。名寄せ処理も入力検証もAIも要らない。</p>
+
+  <p>データベース側でも、<strong>メニュー用のテーブルを作らない</strong>。選択肢は注文テーブルから重複を除いて取り出すだけ。</p>
+
+<pre><code>select distinct item_name, price
+from bento_orders
+where event_id = $1;</code></pre>
+</section>
+
+<section>
+  <h2><span class="no">07</span>お金の計算</h2>
+  <p class="msg">配送料は全員で均等に割る。ただし弁当の値段が違うので、各自が送る金額は全員バラバラになる。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表3: 6人・配送料¥500 の場合の計算（¥500 ÷ 6人 = ¥83.33 → 切り上げて ¥84）</caption>
+    <thead><tr><th style="width:26%">品</th><th class="num" style="width:14%">弁当代</th><th class="num" style="width:14%">配送料の割前</th><th class="num" style="width:16%">送る金額</th><th class="num">人数</th></tr></thead>
+    <tbody>
+      <tr><td>唐揚げ弁当</td><td class="num">¥650</td><td class="num">+¥84</td><td class="num"><strong>¥734</strong></td><td class="num">3</td></tr>
+      <tr><td>のり弁</td><td class="num">¥480</td><td class="num">+¥84</td><td class="num"><strong>¥564</strong></td><td class="num">2</td></tr>
+      <tr><td>幕の内</td><td class="num">¥820</td><td class="num">+¥84</td><td class="num"><strong>¥904</strong></td><td class="num">1</td></tr>
+      <tr class="total"><td>合計</td><td class="num">¥4,310</td><td class="num">+¥504</td><td class="num">¥4,814</td><td class="num">6</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>決めたルールは3つ。</p>
+  <ul>
+    <li><strong>均等割にする（弁当代に比例させない）。</strong>配送は個数ではなく1回の配達に対してかかる費用なので、人数で割るのが自然</li>
+    <li><strong>端数は切り上げる。</strong>¥83.33 を切り捨てると集金が足りなくなって幹事が持ち出しになる。切り上げれば ¥4 余るだけで済む（余りは幹事の取り分）</li>
+    <li><strong>金額の入力チェックはしない。</strong>¥820 を ¥8,200 と打っても、集計メッセージに大きく出るので人間が必ず気づく。上限を決め打つと、高い弁当や2人分まとめる場合が弾かれてそちらの害が大きい</li>
+  </ul>
+
+  <p class="note">この「みんなで割る費用」の欄は配送料専用ではなく、複数行で <code>配送料 500</code> <code>API代 300</code> のように何個でも入れられる。均等割のロジックは同じものを使い回せるので、実装は増えない。</p>
+</section>
+
+<section>
+  <h2><span class="no">08</span>データの持ち方</h2>
+  <p class="msg">テーブルは3つだけ。1人1個という仕様を、アプリのコードではなくデータベースの制約で保証する。</p>
+
+<pre><code>create table bento_events (
+  id           text primary key,
+  guild_id     text not null,
+  channel_id   text not null,
+  message_id   text,                     -- 書き換える対象のメッセージ
+  title        text not null,
+  menu_url     text,
+  status       text not null default 'open' check (status in ('open', 'closed')),
+  shared_costs text not null default '[]',  -- JSON: [{"label":"配送料","amount":500}]
+  created_at   text not null default (datetime('now'))
+);
+
+create table bento_orders (
+  id              text primary key,
+  event_id        text not null references bento_events(id) on delete cascade,
+  discord_user_id text not null,
+  display_name    text not null,
+  item_name       text not null,
+  price           integer not null,
+  paid            integer not null default 0,  -- SQLite に boolean は無い。0/1
+  created_at      text not null default (datetime('now')),
+  unique (event_id, discord_user_id)           -- ← 1人1個をここで担保する
+);
+
+create index idx_bento_orders_event on bento_orders (event_id);
+
+create table guild_settings (
+  guild_id   text primary key,
+  paypay_url text
+);</code></pre>
+
+  <p class="note"><strong>D1 の中身は SQLite なので、PostgreSQL の書き方はそのまま通らない。</strong>型は少なく、<code>uuid</code> も <code>boolean</code> も <code>jsonb</code> も無い。ID は <code>crypto.randomUUID()</code> でアプリ側が作って <code>text</code> に入れ、真偽値は <code>0</code> / <code>1</code>、JSON は文字列で持って読むときに <code>JSON.parse</code> する。日時も文字列。</p>
+
+  <p>最後の <code>unique (event_id, discord_user_id)</code> が効いている。同じ人が2回注文しようとすると<strong>データベースが拒否する</strong>ので、「すでに注文済みかどうか」を毎回コードで確認する必要がない。二重注文というバグが構造的に起きなくなる。</p>
+
+  <p><code>message_id</code> は、書き換える対象のメッセージを覚えておくためのもの。これがないと、次に誰かが注文したときにどのメッセージを更新すればいいか分からなくなる。</p>
+</section>
+
+<section>
+  <h2><span class="no">09</span>作らないと決めたもの</h2>
+  <p class="msg">短い期間で仕上げるために削ったのではなく、あったほうが悪くなるから削った。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表4: 検討して落とした機能と、その理由</caption>
+    <thead><tr><th style="width:30%">落としたもの</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>ログイン・認証</td><td>Discord が本人確認を済ませてくれている（→ 03）</td></tr>
+      <tr><td>Webページ</td><td>開かせた時点で「Discordで完結」が崩れる。デプロイするのは Worker 1本だけ</td></tr>
+      <tr><td>数量（1人で2個）</td><td>アルムナイの弁当では起きない。入れると入力欄・検算・割り勘の計算が全部増える</td></tr>
+      <tr><td>締切時刻の自動判定</td><td>幹事が「締め切っていい？」と聞いて締めるので、機械が時刻を知る必要がない。日時のパース（「明日の21時」をどう読むか）という事故りやすい処理が丸ごと消えた</td></tr>
+      <tr><td>定期実行（cron）とリマインド</td><td>締切を手動にしたので不要。Cron Triggers も時刻パースも書かずに済んだ</td></tr>
+      <tr><td>締切後の変更・キャンセル</td><td>例外は扱わない。締め切ったらボタンが切り替わるだけ</td></tr>
+      <tr><td>権限管理・幹事という概念</td><td>内輪で悪用されない前提。権限チェックのコードがゼロになった</td></tr>
+      <tr><td>メニュー登録機能</td><td>注文がそのままメニューになる（→ 06）</td></tr>
+      <tr><td>AI / LLM の組み込み</td><td>この課題の「AI活用」は<strong>AIを使って開発すること</strong>を指す。動くシステムの中で LLM を呼ぶ場所はない</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2><span class="no">10</span>用語</h2>
+  <dl class="glossary">
+    <dt>スラッシュコマンド</dt>
+    <dd>Discord のメッセージ欄で <code>/</code> から始めて呼び出すコマンド。この Bot では幹事が使う <code>/bento</code> だけ。</dd>
+
+    <dt>インタラクション (Interaction)</dt>
+    <dd>ユーザーがコマンドを打ったりボタンを押したりしたときに、Discord から自分のサーバーへ飛んでくる HTTPリクエストのこと。この Bot が受け取るのはこれだけ。</dd>
+
+    <dt>Interactions Endpoint URL</dt>
+    <dd>そのリクエストの届け先として Discord 側に登録する URL。ここでは <code>https://bento.&lt;自分の名前&gt;.workers.dev/</code>。<strong>登録時に Discord が疎通確認をしてくるので、署名検証を実装するまで登録できない。</strong></dd>
+
+    <dt>モーダル (Modal)</dt>
+    <dd>ボタンを押すと開く入力用の小窓。テキスト欄が最大5つまで置ける（日付を選ぶカレンダーのような部品は存在しない）。この Bot では「品名と金額」「配送料」の入力に使う。</dd>
+
+    <dt>セレクトメニュー (Select Menu)</dt>
+    <dd>プルダウンで選ぶ部品。選択肢は25件まで。<code>[ 頼む ▼ ]</code> がこれ。</dd>
+
+    <dt>Embed</dt>
+    <dd>Discord のメッセージをきれいに整形して表示するための構造。図1・図2の見た目はこれで作る。</dd>
+
+    <dt>Ed25519 署名</dt>
+    <dd>Discord が「このリクエストは確かに Discord が送った」ことを証明するためにつける電子署名。Workers のランタイムに入っている <code>crypto.subtle</code> が Ed25519 に対応しているので、追加のライブラリは要らない。</dd>
+
+    <dt>Worker</dt>
+    <dd>Cloudflare 上で動く、リクエストが来たときだけ起動する関数。<code>src/index.ts</code> に <code>fetch</code> を書くだけ。サーバーの常時起動も、待機中の課金も無い。</dd>
+
+    <dt>D1</dt>
+    <dd>Cloudflare の SQLite データベース。<strong>外向きの URL も API キーも無く、<code>wrangler.jsonc</code> で紐づけた Worker から <code>env.DB</code> 経由でしか触れない。</strong>この「外から触れない」が、そのままセキュリティ設計になっている。</dd>
+
+    <dt>バインディング (binding)</dt>
+    <dd>Worker に D1 などの資源を結びつける設定。<code>wrangler.jsonc</code> に書くと、コードから <code>env.DB</code> という名前で使えるようになる。接続文字列やパスワードを環境変数に置く必要がない。</dd>
+  </dl>
+</section>
+
+<section>
+  <h2><span class="no">11</span>作る順番</h2>
+  <p class="msg">最初の関門は step 2。ここが通らないと Bot は1ミリも動かないので、他に何も足さずにここだけ通す。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表5: 実装の順序と完了条件</caption>
+    <thead><tr><th style="width:6%">#</th><th style="width:38%">やること</th><th>できたと言える状態</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td><code>npm run db:create</code> → <code>npm run deploy</code> で空のまま Worker を出す</td><td><code>*.workers.dev</code> の URL が確定する（この URL がないと 2 に進めない）</td></tr>
+      <tr><td class="num">2</td><td><strong>Discord Application を作り、署名検証と PING 応答だけ実装</strong></td><td>Discord の管理画面で Interactions Endpoint URL の保存が成功する</td></tr>
+      <tr><td class="num">3</td><td>テーブル3つのマイグレーション</td><td><code>npm run db:apply</code>（手元）と <code>npm run db:apply:remote</code>（本番）が両方通る</td></tr>
+      <tr><td class="num">4</td><td><code>/bento</code> → モーダル → 集計メッセージ投稿</td><td>チャンネルに空の集計メッセージが出る</td></tr>
+      <tr><td class="num">5</td><td><code>[ 新しく入力 ]</code> → <code>[ 頼む ▼ ]</code> の順に注文導線</td><td>2人目が1タップで同じ品を頼める</td></tr>
+      <tr><td class="num">6</td><td><code>[ 締め切る ]</code> → 割り勘計算 → 集金モード</td><td>各行に「送る金額」が出る</td></tr>
+      <tr><td class="num">7</td><td><code>[ 支払った ]</code> / <code>[ 取り消す ▼ ]</code> / <code>[ 未払いに戻す ▼ ]</code></td><td>未払いが 0 人になる</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="note">step 2 でつまずく原因はほぼ3つに絞られる。<strong>(1)</strong> <code>req.json()</code> を先に呼んでしまい生の本文が取れない。<strong>(2)</strong> 環境変数の公開鍵（Public Key）を Bot Token と取り違えている。<strong>(3)</strong> <code>type: 1</code> の PING に <code>{"type": 1}</code> を返していない。</p>
+</section>
+
+<section>
+  <h2><span class="no">12</span>決めてほしいこと</h2>
+  <p class="msg">設計は固まっている。残りは実装しながらでも決められるが、早いほうがいい。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表6: 未決事項</caption>
+    <thead><tr><th style="width:34%">論点</th><th style="width:22%">いつまでに</th><th>補足</th></tr></thead>
+    <tbody>
+      <tr><td>PayPay リンクの登録方法</td><td>step 4 まで</td><td><code>/bento-setup</code> を別に作るか、最初の <code>/bento</code> のモーダルに混ぜるか。どちらでも軽い</td></tr>
+      <tr><td>表示名をいつ保存するか</td><td>step 5 まで</td><td>Discord のニックネームは変わる。注文した時点の名前を焼き込む前提でよいか</td></tr>
+      <tr><td>集計メッセージの pin</td><td>step 4 まで</td><td>Bot に自動で pin させるなら <code>Manage Messages</code> 権限が必要。幹事が手で pin してもいい</td></tr>
+      <tr><td>同じチャンネルで2件同時に走った場合</td><td>実運用前</td><td>破綻はしないが pin が2枚になって紛らわしい。1チャンネル1件に制限するかどうか</td></tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+</div>

@@ -7,7 +7,7 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!types/database.types.ts"]
+    "includes": ["**"]
   },
   "formatter": {
     "enabled": true,
@@ -17,11 +17,6 @@
   },
   "linter": {
     "enabled": true,
-    "domains": {
-      "next": "recommended",
-      "react": "recommended",
-      "tailwind": "recommended"
-    },
     "rules": {
       "preset": "recommended"
     }
@@ -38,11 +33,6 @@
       "source": {
         "organizeImports": "on"
       }
-    }
-  },
-  "css": {
-    "parser": {
-      "tailwindDirectives": true
     }
   }
 }

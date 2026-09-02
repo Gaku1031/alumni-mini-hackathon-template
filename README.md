@@ -1,22 +1,22 @@
-# Next.js × Supabase テンプレート
+# お弁当注文Bot
 
-Next.js + Supabase のスターターです。
-Supabase をローカル（Docker）で動かしながら開発し、そのまま Vercel + Supabase（無料枠）にデプロイできます。
+Discord のチャンネルに貼った**1枚のメッセージ**が、注文が入るたびに書き換わる。
+注文も集計も集金の管理も、Discord から出ずに終わる。Webサイトは作らない。
 
-アプリ本体は入っていません。
-入っているのは「Next.js と Supabase がつながった状態」と「DB を変更する手順」だけです。
+設計の全体像は [`docs/bento-design.html`](docs/bento-design.html)（ブラウザで開く）、
+決定の経緯は [`grill-bento-order-20260902.md`](grill-bento-order-20260902.md)。
 
 ## 技術スタック
 
 | | |
 |---|---|
-| フレームワーク | Next.js 16（App Router） |
-| スタイル | Tailwind CSS v4 |
-| DB / API | Supabase（PostgreSQL + PostgREST） |
-| ホスティング | Vercel |
+| 実行環境 | Cloudflare Workers（TypeScript） |
+| DB | Cloudflare D1（SQLite） |
 | Lint / Format | Biome |
-| 認証 | **使いません**（後述） |
-| ストレージ | **使いません** |
+| 認証 | **使わない**（誰が押したかは Discord が署名付きで送ってくる） |
+| ストレージ | **使わない** |
+
+依存パッケージは wrangler / TypeScript / Biome だけ。ランタイムの依存はゼロ。
 
 ---
 
@@ -25,183 +25,132 @@ Supabase をローカル（Docker）で動かしながら開発し、そのま�
 ### 前提
 
 - Node.js 20 以上
-- Docker が動いていること（Docker Desktop / OrbStack / Rancher Desktop のいずれか）
-  - `docker ps` がエラーにならなければOK
+- Cloudflare アカウント（無料）
+- Discord のサーバー（Bot を入れる先）
 
-### 手順
+### 1. インストールと D1 の作成
 
 ```bash
 npm install
-cp .env.local.example .env.local
-npm run db:start   # 初回は Docker イメージの取得に5〜10分かかります
-npm run dev
+npx wrangler login
+npm run db:create              # 出力された database_id を wrangler.jsonc に貼る
+npm run db:apply               # ローカルの D1 にテーブルを作る
 ```
 
-[http://localhost:3000](http://localhost:3000) を開いて「接続できています」と緑色で出れば成功です。
+### 2. Worker をデプロイして URL を確定させる
 
-| URL | 用途 |
-|---|---|
-| http://localhost:3000 | アプリ |
-| http://127.0.0.1:54323 | Supabase Studio（テーブルを GUI で見る・SQL を実行する） |
-| http://127.0.0.1:54324 | Mailpit（ローカルで送信されたメールの確認。認証を足したとき用） |
+**Discord の設定より先にデプロイする。** URL が無いと次に進めないため。
 
-作業を終えるときは `npm run db:stop` で止めてください（データは残ります）。
+```bash
+npm run deploy                 # https://bento.<自分の名前>.workers.dev が出る
+```
+
+### 3. Discord Application を作る
+
+1. [Discord Developer Portal](https://discord.com/developers/applications) で New Application
+2. **General Information** の `PUBLIC KEY` を控える
+3. **Bot** タブでトークンを発行して控える
+4. secret を登録する
+
+```bash
+npx wrangler secret put DISCORD_PUBLIC_KEY
+npx wrangler secret put DISCORD_BOT_TOKEN
+npm run deploy                 # secret を反映
+npm run db:apply:remote        # 本番の D1 にテーブルを作る（ローカルとは別物）
+```
+
+5. **General Information** の `INTERACTIONS ENDPOINT URL` に手順2の URL を入れて保存
+
+保存を押すと Discord が疎通確認を投げてくる。**署名検証が通らないと保存できない**。
+ここが最初の関門で、`src/index.ts` には通る実装が入っている。
+
+### 4. ローカル開発
+
+```bash
+cp .dev.vars.example .dev.vars   # DISCORD_PUBLIC_KEY / DISCORD_BOT_TOKEN を書く
+npm run dev                      # http://127.0.0.1:8787
+node --test test/interaction.test.mjs   # 署名検証の自己チェック（別ターミナルで dev 起動中に）
+```
+
+Discord から手元へ届かせたい場合は `cloudflared tunnel --url http://127.0.0.1:8787` などで
+一時 URL を作り、Interactions Endpoint URL をそちらに向ける。
 
 ---
 
 ## DB を変更する
 
-**Studio で作ったテーブルはそのままでは他のメンバーに共有されません。**
-必ずマイグレーションファイルに残してください。
+```bash
+npm run db:new -- add_something   # migrations/000N_add_something.sql が作られる
+# SQL を書く（既存のファイルは書き換えない。必ず新しいファイルを足す）
+npm run db:apply                  # ローカルに適用
+npm run db:apply:remote           # 本番に適用
+```
 
-### 手順1: SQL を自分で書く場合
+**ローカル（`--local`）とリモート（`--remote`）は別の DB。**
+手元で通っても本番にテーブルはできていない。デプロイのたびに両方打つ癖をつける。
+
+中身を覗くとき:
 
 ```bash
-npm run db:new -- create_items      # supabase/migrations/<日時>_create_items.sql が作られる
-# 作られたファイルに CREATE TABLE などを書く
-npm run db:reset                    # DB を作り直して全マイグレーション + seed を流す
-npm run db:types                    # TypeScript の型を再生成する
+npm run db:console -- "select * from bento_orders"
 ```
 
-### 手順2: Studio の GUI で作った場合
+### D1 は SQLite
 
-```bash
-# Studio でテーブルを作ったあと
-npm run db:diff -- create_items     # 差分をマイグレーションファイルに書き出す
-npm run db:types
-```
+PostgreSQL の書き方は通らない。`uuid` `boolean` `jsonb` `timestamptz` は無い。
 
-### `npm run db:reset` について
+| やりたいこと | SQLite での書き方 |
+|---|---|
+| ID | `text primary key` に `crypto.randomUUID()` を入れる |
+| 真偽値 | `integer` の `0` / `1` |
+| JSON | `text` に入れて読むとき `JSON.parse` |
+| 日時 | `text not null default (datetime('now'))` |
 
-ローカルの DB を**作り直します**。手で入れたデータは消えます。
-消えると困る初期データは `supabase/seed.sql` に書いてください。リセットのたびに自動で入ります。
-
----
-
-## RLS（いちばんハマるところ）
-
-Supabase では、RLS（Row Level Security）を有効にしたテーブルは
-**ポリシーが無いと「エラーではなく空の配列」が返ります。**
-「クエリは成功しているのにデータが出ない」ときは、まずここを疑ってください。
-
-このテンプレートは認証を使わないので、`anon` ロールに対してポリシーを書きます。
-
-```sql
-create table public.items (
-  id bigint generated always as identity primary key,
-  name text not null,
-  created_at timestamptz not null default now()
-);
-
-alter table public.items enable row level security;
-
-create policy "anon can read items"   on public.items for select to anon using (true);
-create policy "anon can insert items" on public.items for insert to anon with check (true);
-create policy "anon can update items" on public.items for update to anon using (true) with check (true);
-create policy "anon can delete items" on public.items for delete to anon using (true);
-```
-
-見本が `supabase/migrations/*_init.sql` にあります（`notes` テーブル）。
-自分のテーブルを作るときに消して構いません。
-
-> **注意**: 認証を使わない構成なので、デプロイ後の URL を知っている人は誰でもデータを読み書きできます。
-> 個人情報や機密情報は入れないでください。
+スキーマは `migrations/0001_init.sql`。
 
 ---
 
 ## コードの書き方
 
-### Supabase クライアント
+### D1
 
-用途によって使い分けます。自分で `createClient` を書かず、この2つを使ってください。
-
-```ts
-// Server Component / Server Action / Route Handler
-import { createClient } from "@/lib/supabase/server";
-
-export default async function Page() {
-  const supabase = await createClient();
-  const { data } = await supabase.from("items").select();
-  // ...
-}
-```
+`wrangler.jsonc` の binding 経由でしか触れない。**外向きの URL も API キーも無い。**
 
 ```ts
-// Client Component（"use client" を付けたファイル）
-"use client";
-import { createClient } from "@/lib/supabase/client";
-
-const supabase = createClient();
+const rows = await env.DB.prepare(
+  "select * from bento_orders where event_id = ?",
+).bind(eventId).all();
 ```
 
-まずは Server Component（`await createClient()`）で書くのがおすすめです。
-ボタンのクリックで書き込みたいときは Server Action を使ってください。
+これがこのアプリのセキュリティの中心にある。
+署名検証を通らないリクエストは、そもそもデータベースに到達する経路を持たない。
+**公開 API を足すと、この保証が消える。**
 
-### 型
+### Discord Interactions で踏む3つの地雷
 
-`types/database.types.ts` は `npm run db:types` の生成物です。**手で編集しないでください。**
-スキーマを変えたら生成し直せば、`supabase.from("items").select()` の戻り値に型が付きます。
+1. **生ボディが要る。** `await req.text()` で受けて検証してから `JSON.parse`。
+   先に `req.json()` を呼ぶと署名検証ができなくなる
+2. **3秒で切られる。** D1 の読み書き＋Discord API への PATCH が挟まる操作は
+   `type: 5`(deferred) を先に返し、`ctx.waitUntil()` で続きを回す
+3. **PING を返し忘れない。** `type: 1` が来たら `{ type: 1 }` を返す。これが Endpoint 登録の疎通確認
 
 ### Lint / Format
 
-Lint も整形も [Biome](https://biomejs.dev/) に一本化しています（ESLint と Prettier は入れていません）。
-Next.js・React・Tailwind 向けのルールは Biome のドメイン機能で有効にしてあります。
-
 ```bash
-npm run check       # lint + 整形 + import順 をまとめて確認（書き換えない）
-npm run check:fix   # 上をまとめて自動修正
-npm run lint        # lint だけ
-npm run format      # 整形だけ
+npm run check       # lint + 整形 + import順（書き換えない）
+npm run check:fix   # 自動修正
 ```
 
-保存時に自動整形されるよう `.vscode/settings.json` を入れてあるので、
-VS Code なら拡張機能「Biome」を入れるだけで動きます（初回に推奨拡張として案内が出ます）。
-
-`types/database.types.ts` は生成物なので対象から外しています。
+保存時に自動整形されるよう `.vscode/settings.json` を入れてある。
+VS Code なら拡張機能「Biome」を入れるだけで動く。
 
 ---
 
-## デプロイ
+## 無料枠
 
-### 1. Supabase（本番）
-
-1. [supabase.com](https://supabase.com) でプロジェクトを作る（リージョンは `Northeast Asia (Tokyo)`）
-2. DB パスワードは控えておく
-3. ローカルのマイグレーションを本番に反映する
-
-```bash
-npx supabase login
-npm run db:link -- --project-ref <プロジェクトのRef>   # Ref は Supabase の URL に含まれる文字列
-npm run db:push
-```
-
-`seed.sql` は本番には流れません。初期データが必要なら Studio か SQL Editor で入れてください。
-
-### 2. Vercel
-
-1. GitHub にリポジトリを push する
-2. [vercel.com](https://vercel.com) で Import する（設定は変更不要）
-3. Environment Variables に以下を設定する
-
-| 変数名 | 取得場所 |
-|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase の Project Settings → Data API → API URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase の Project Settings → API Keys → Publishable Key |
-
-> **`NEXT_PUBLIC_SUPABASE_URL` は `https://<ref>.supabase.co` の形だけを貼ること。**
-> 末尾の `/` や `/rest/v1/` を付けたまま貼ると、実行時に
-> `Invalid path specified in request URL（code: PGRST125）` になります。
-> （末尾スラッシュや `/rest/v1` はコード側でも除去していますが、貼る時点で外しておくのが確実です）
-
-`.env.example` に空のテンプレートがあります。
-
-> `types/database.types.ts` はコミットしてください。Vercel のビルドでは再生成できません。
-
-### 無料枠の注意
-
-- Supabase の無料プロジェクトは **7日間アクセスが無いと一時停止**します（ダッシュボードから再開可能）
-- Supabase の無料プロジェクトは1組織あたり2つまで
-- Vercel の Hobby プランは商用利用不可
+- Workers: 10万リクエスト/日
+- D1: 5GB / 500万行読み取り per day
+- **休止しない。** 使わない期間が空いても、次に叩いたときそのまま動く
 
 ---
 
@@ -209,28 +158,11 @@ npm run db:push
 
 | 症状 | 対処 |
 |---|---|
-| 「接続できませんでした」と赤く出る | `npm run db:start` を実行したか、`.env.local` があるか確認 |
-| `Invalid path specified in request URL（code: PGRST125）` | `NEXT_PUBLIC_SUPABASE_URL` に `/rest/v1/` や末尾 `/` が付いている。`https://<ref>.supabase.co` だけにして再デプロイ |
-| クエリは成功するのにデータが0件 | RLS ポリシーが無い。上の「RLS」を参照 |
-| `supabase start` が失敗する | Docker が起動しているか確認。ポート 54321〜54324 が空いているか確認 |
-| 型が古いまま | `npm run db:types` を実行し忘れ |
-| チームメンバーの DB にテーブルが無い | マイグレーションを作らず Studio で直接作った。`npm run db:diff -- <名前>` |
-| `npm run db:reset` でデータが消えた | 仕様です。初期データは `supabase/seed.sql` に書く |
-
----
-
-## 認証を後から足したくなったら
-
-このテンプレートは認証なしですが、`lib/supabase/server.ts` は Cookie を扱える形で書いてあるので、
-以下を足せば動きます。
-
-1. `proxy.ts` をリポジトリ直下に作り、セッション更新を行う
-   （**Next.js 16 で `middleware.ts` は `proxy.ts` にリネームされました**。
-   ネット上の記事は `middleware.ts` のままのものが多いので注意）
-2. ログイン用のページと Server Action を作る
-3. RLS ポリシーを `to anon` から `to authenticated` + `auth.uid()` ベースに書き換える
-
-公式ドキュメント: https://supabase.com/docs/guides/auth/server-side/nextjs
+| Interactions Endpoint URL が保存できない | 署名検証が通っていない。`req.text()` より先に `req.json()` を呼んでいないか、`DISCORD_PUBLIC_KEY` が本番に登録されているか |
+| 本番だけ `no such table` | `npm run db:apply:remote` を打っていない |
+| Bot が「アプリケーションが応答しませんでした」 | 3秒を超えている。`type: 5` を先に返す形に変える |
+| `env.DB is undefined` | `wrangler.jsonc` の `database_id` が `PLACEHOLDER` のまま |
+| 型が古い | `npm run types`（`wrangler types` の生成物が `worker-configuration.d.ts`） |
 
 ---
 
@@ -238,18 +170,12 @@ npm run db:push
 
 | コマンド | 内容 |
 |---|---|
-| `npm run dev` | 開発サーバー起動 |
-| `npm run build` | 本番ビルド |
-| `npm run check` | Biome で lint + 整形 + import順を確認 |
-| `npm run check:fix` | 上をまとめて自動修正 |
-| `npm run lint` | lint だけ |
-| `npm run format` | 整形だけ |
-| `npm run db:start` | ローカル Supabase 起動 |
-| `npm run db:stop` | ローカル Supabase 停止 |
-| `npm run db:status` | 起動状況と接続情報の表示 |
-| `npm run db:reset` | DB を作り直す（migrations + seed） |
+| `npm run dev` | ローカルで Worker を起動（127.0.0.1:8787） |
+| `npm run deploy` | Cloudflare にデプロイ |
+| `npm run db:create` | D1 データベースを作る（初回だけ） |
 | `npm run db:new -- <名前>` | 空のマイグレーションファイルを作る |
-| `npm run db:diff -- <名前>` | Studio での変更をマイグレーションに書き出す |
-| `npm run db:types` | DB スキーマから TypeScript の型を生成 |
-| `npm run db:link -- --project-ref <Ref>` | 本番 Supabase と紐付け |
-| `npm run db:push` | 本番 Supabase にマイグレーションを適用 |
+| `npm run db:apply` | ローカルの D1 にマイグレーションを適用 |
+| `npm run db:apply:remote` | 本番の D1 にマイグレーションを適用 |
+| `npm run db:console -- "<SQL>"` | ローカルの D1 に SQL を投げる |
+| `npm run types` | binding から TypeScript の型を再生成 |
+| `npm run check` / `check:fix` | Biome |
