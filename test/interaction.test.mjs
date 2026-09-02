@@ -100,3 +100,22 @@ test("ボディを差し替えたら 401（署名対象は生ボディ）", asyn
   const res = await fetch(URL_, { method: "POST", headers, body: JSON.stringify({ type: 2 }) });
   assert.equal(res.status, 401);
 });
+
+// JSON として同じでもバイト列は違う。先に req.json() して詰め直した文字列で
+// 検証していると、この署名は合わなくなって 401 に落ちる
+test("空白入りのボディでも通る（検証は生ボディ文字列に対して行う）", async () => {
+  const body = '{ "type" : 1 }';
+  const res = await fetch(URL_, { method: "POST", headers: signed(body), body });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { type: 1 });
+});
+
+test("POST 以外は 405", async () => {
+  const res = await fetch(URL_, { method: "GET" });
+  assert.equal(res.status, 405);
+});
+
+test("外部ライブラリを足していない（dependencies が空）", () => {
+  const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+  assert.deepEqual(pkg.dependencies ?? {}, {});
+});
