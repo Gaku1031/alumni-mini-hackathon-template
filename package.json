@@ -13,6 +13,7 @@
     "db:console": "wrangler d1 execute bento --local --command",
     "check": "biome check .",
     "check:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
     "types": "wrangler types",
     "postinstall": "wrangler types"
   },

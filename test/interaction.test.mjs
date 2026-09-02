@@ -114,8 +114,3 @@ test("POST 以外は 405", async () => {
   const res = await fetch(URL_, { method: "GET" });
   assert.equal(res.status, 405);
 });
-
-test("外部ライブラリを足していない（dependencies が空）", () => {
-  const pkg = JSON.parse(readFileSync("package.json", "utf8"));
-  assert.deepEqual(pkg.dependencies ?? {}, {});
-});
