@@ -126,16 +126,22 @@ test("setMessageId で集計メッセージの id を書き戻せる", async () 
   conn.close();
 });
 
-test("同じ人が2回頼んでも落ちず、重複として返る", async () => {
+test("AC-3: addOrder を同一ユーザーで2回呼ぶと、例外で落ちず重複として識別できる結果が返る", async () => {
   const conn = createTestDb();
   const id = await newEvent(conn);
 
   const first = await db.addOrder(conn, order(id));
   assert.equal(first.ok, true);
+  assert.ok(first.id, "1回目は作った注文の id が返る");
 
-  const second = await db.addOrder(conn, order(id, { itemName: "のり弁", price: 480 }));
-  assert.deepEqual(second, { ok: false, reason: "duplicate" });
+  // 2回目。throw させずに戻り値で重複を伝える
+  const again = order(id, { itemName: "のり弁", price: 480 });
+  await assert.doesNotReject(() => db.addOrder(conn, again), "2回目で例外が飛んだ");
+  const second = await db.addOrder(conn, again);
+  assert.equal(second.ok, false);
+  assert.equal(second.reason, "duplicate");
 
+  // 上書きも二重登録もされていない
   const orders = await db.listOrders(conn, id);
   assert.equal(orders.length, 1);
   assert.equal(orders[0].item_name, "唐揚げ弁当");

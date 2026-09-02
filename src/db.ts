@@ -124,10 +124,22 @@ export async function addOrder(
   const id = crypto.randomUUID();
   const { eventId, discordUserId, displayName, itemName, price } = input;
   const statement = db.prepare(INSERT_ORDER);
-  const { meta } = await statement
-    .bind(id, eventId, discordUserId, displayName, itemName, price)
-    .run();
-  return meta.changes > 0 ? { ok: true, id } : { ok: false, reason: "duplicate" };
+  try {
+    const { meta } = await statement
+      .bind(id, eventId, discordUserId, displayName, itemName, price)
+      .run();
+    return meta.changes > 0 ? { ok: true, id } : { ok: false, reason: "duplicate" };
+  } catch (error) {
+    // do nothing で 0 件になるはずだが、unique 違反を例外で投げてくる場合もある。
+    // 呼び出し側は「すでに頼んでいます」と返せれば良いので、ここで止める
+    if (isUniqueViolation(error)) return { ok: false, reason: "duplicate" };
+    throw error;
+  }
+}
+
+/** 1人1個の unique 制約に当たったか。D1 は "D1_ERROR: UNIQUE constraint failed: ..." で来る */
+function isUniqueViolation(error: unknown): boolean {
+  return error instanceof Error && /unique constraint failed/i.test(error.message);
 }
 
 /** 消せたら true。取り消しは誰でも押せるので、既に消えていることがある */
