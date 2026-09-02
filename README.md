@@ -173,11 +173,13 @@ const rows = await env.DB.prepare(
    `type: 5`(deferred) を先に返し、`ctx.waitUntil()` で続きを回す
 3. **PING を返し忘れない。** `type: 1` が来たら `{ type: 1 }` を返す。これが Endpoint 登録の疎通確認
 
-### Lint / Format
+### Lint / Format / 型
 
 ```bash
 npm run check       # lint + 整形 + import順（書き換えない）
 npm run check:fix   # 自動修正
+npm run typecheck   # TypeScript の型チェック（tsc --noEmit）
+npm test            # test/*.test.mjs をまとめて実行
 ```
 
 保存時に自動整形されるよう `.vscode/settings.json` を入れてある。
@@ -220,3 +222,5 @@ VS Code なら拡張機能「Biome」を入れるだけで動く。
 | `npm run db:console -- "<SQL>"` | ローカルの D1 に SQL を投げる |
 | `npm run types` | binding から TypeScript の型を再生成 |
 | `npm run check` / `check:fix` | Biome |
+| `npm run typecheck` | TypeScript の型チェック |
+| `npm test` | テストをまとめて実行 |
