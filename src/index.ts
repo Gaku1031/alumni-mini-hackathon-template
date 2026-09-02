@@ -5,7 +5,16 @@
 
 import { addOrder, createEvent, getEventByMessage, listOrders, setMessageId } from "./db";
 import type { ModalRow } from "./discord";
-import { ackUpdate, modal, modalBody, modalValues, patchMessage, pong, postMessage, reply } from "./discord";
+import {
+  ackUpdate,
+  modal,
+  modalBody,
+  modalValues,
+  patchMessage,
+  pong,
+  postMessage,
+  reply,
+} from "./discord";
 import { newItemModal, renderOpen } from "./render";
 
 /** Discord が送ってくる interaction type のうち、使うものだけ */
@@ -172,7 +181,8 @@ async function handleNewItem(
     price,
   });
   // 1人1個。入れ直したいときは [取り消す ▼] で消してもらう
-  if (!added.ok) return reply("すでに頼んでいます。変えるときは [取り消す ▼] で消してから入れ直してください");
+  if (!added.ok)
+    return reply("すでに頼んでいます。変えるときは [取り消す ▼] で消してから入れ直してください");
 
   return ackUpdate(ctx, async () => {
     const orders = await listOrders(env.DB, event.id);
