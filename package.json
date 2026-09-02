@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "test": "node --test test/*.test.mjs",
     "deploy": "wrangler deploy",
+    "register": "node scripts/register-commands.mjs",
     "db:create": "wrangler d1 create bento",
     "db:new": "wrangler d1 migrations create bento",
     "db:apply": "wrangler d1 migrations apply bento --local",
