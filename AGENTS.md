@@ -47,7 +47,7 @@ Discord のお弁当注文Bot。設計は `docs/bento-design.html` と `grill-be
 ## Lint / Format
 
 - Biome に一本化している。ESLint と Prettier は入っていない
-- コードを書き換えたら `npm run check:fix` を実行し、`npm run check` が通る状態にする
+- コードを書き換えたら `npm run check:fix` を実行し、`npm run check` と `npm run typecheck` が通る状態にする
 - インデントはスペース2、ダブルクォート、行幅100
 
 ## その他
