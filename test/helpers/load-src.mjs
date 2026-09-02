@@ -2,6 +2,7 @@
  * src/*.ts を型だけ落として読み込む。
  *
  *   const { handleInteraction } = await loadSrc("index");
+ *   const worker = (await loadSrc("index.mjs")).default;
  *
  * 1ファイルで完結する db.ts や discord.ts は data: URL に流し込めば読めるが、
  * index.ts は ./db や ./discord を import するので相対パスが解ける場所が要る。
@@ -31,7 +32,9 @@ function build() {
   return out;
 }
 
-export function loadSrc(name) {
+export function loadSrc(entry) {
   dir ??= build();
-  return import(pathToFileURL(join(dir, `${name}.mjs`)).href);
+  // "index" でも "index.mjs" でも受け付ける
+  const file = entry.endsWith(".mjs") ? entry : `${entry}.mjs`;
+  return import(pathToFileURL(join(dir, file)).href);
 }

@@ -7,22 +7,9 @@
  * ボタンから開く Modal の中身（newItemModal）も、同じ理由でここに置く。
  */
 
+import type { BentoEvent, Order } from "./db";
 import type { MessageBody } from "./discord";
 import type { SharedCost, Split } from "./split";
-
-/** bento_orders の1行のうち、描画に要る分だけ */
-export type Order = {
-  id: string;
-  display_name: string;
-  item_name: string;
-  price: number;
-};
-
-/** bento_events のうち、描画に要る分だけ */
-export type BentoEvent = {
-  title: string;
-  menu_url?: string | null;
-};
 
 /** 同じ品（item_name + price）に集まった注文 */
 export type ItemGroup = {
@@ -83,7 +70,11 @@ function itemLine(group: ItemGroup): string {
   return `🍱 ${group.item_name}  ${yen(group.price)}  ×${group.orders.length}  ${names}`;
 }
 
-export function renderOpen(event: BentoEvent, orders: Order[]): MessageBody {
+/** 注文フェーズの1枚。まだ誰も頼んでいない状態もここで描く */
+export function renderOpen(
+  event: Pick<BentoEvent, "title" | "menu_url">,
+  orders: Order[],
+): MessageBody {
   const groups = groupByItem(orders);
   const total = orders.reduce((sum, order) => sum + order.price, 0);
 
@@ -95,6 +86,7 @@ export function renderOpen(event: BentoEvent, orders: Order[]): MessageBody {
   ].join("\n");
 
   const rows: MessageBody[] = [];
+
   // 既出の品が無いうちは選択肢が作れない。[新しく入力] だけで始めてもらう
   if (groups.length > 0) {
     rows.push(
@@ -109,6 +101,8 @@ export function renderOpen(event: BentoEvent, orders: Order[]): MessageBody {
       }),
     );
   }
+
+  // 誰のでも取り消せる。打ち間違いを直す手段を兼ねている
   if (orders.length > 0) {
     rows.push(
       row({
@@ -122,6 +116,7 @@ export function renderOpen(event: BentoEvent, orders: Order[]): MessageBody {
       }),
     );
   }
+
   rows.push(
     row(
       { type: BUTTON, custom_id: "new_item", style: PRIMARY, label: "新しく入力" },

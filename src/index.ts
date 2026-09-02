@@ -3,8 +3,9 @@
  * ルーティングが無いのでフレームワークも入れていない。
  */
 
-import { addOrder, getEventByMessage, listOrders } from "./db";
-import { ackUpdate, modal, patchMessage, pong, reply } from "./discord";
+import { addOrder, createEvent, getEventByMessage, listOrders, setMessageId } from "./db";
+import type { ModalRow } from "./discord";
+import { ackUpdate, modal, modalBody, modalValues, patchMessage, pong, postMessage, reply } from "./discord";
 import { newItemModal, renderOpen } from "./render";
 
 /** Discord が送ってくる interaction type のうち、使うものだけ */
@@ -16,15 +17,22 @@ const MODAL_SUBMIT = 5;
 /** `[新しく入力]` のボタンと、そこから開く Modal（`new_item:<元メッセージ id>`） */
 const NEW_ITEM = "new_item";
 
+/** `/bento` で開く Modal。送信されたときにこの custom_id で戻ってくる */
+const CREATE_MODAL = "create_event";
+
 /** 使う分だけ。Discord の payload を全部写しても読めるものは増えない */
 type DiscordUser = { id: string; username: string; global_name?: string | null };
 
+/** 受け取る側で見るところだけ書いた interaction。全部は要らない */
 type Interaction = {
   type: number;
+  guild_id?: string;
+  channel_id?: string;
   data?: {
+    name?: string;
     custom_id?: string;
     /** Modal の入力欄。ACTION_ROW の中に1つずつ入っている */
-    components?: { components?: { custom_id: string; value?: string }[] }[];
+    components?: ModalRow[];
   };
   message?: { id: string };
   member?: { nick?: string | null; user: DiscordUser };
@@ -72,15 +80,6 @@ function actor(interaction: Interaction): { id: string; name: string } {
   return { id: user.id, name: interaction.member?.nick || user.global_name || user.username };
 }
 
-/** Modal の入力を custom_id → 値に均す */
-function modalFields(interaction: Interaction): Record<string, string> {
-  const fields: Record<string, string> = {};
-  for (const row of interaction.data?.components ?? []) {
-    for (const field of row.components ?? []) fields[field.custom_id] = field.value ?? "";
-  }
-  return fields;
-}
-
 /**
  * 金額。上限も相場も見ない（桁を間違えても集計メッセージに出るので人間が気づく）が、
  * 数値として読めないものは入れない。「¥1,200」「１２００円」までは読む。
@@ -90,6 +89,56 @@ function parsePrice(input: string): number | null {
     .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
     .replace(/[¥￥,、\s円]/g, "");
   return /^\d+$/.test(digits) ? Number(digits) : null;
+}
+
+/**
+ * 募集を1件立てて、空の集計メッセージをチャンネルに貼る。
+ * 投稿して初めて message_id が決まるので、貼ったあとに書き戻す。
+ * これが以降の「1枚を書き換え続ける」の書き換え対象になる。
+ */
+async function openEvent(
+  env: Env,
+  input: { guildId: string; channelId: string; title: string; menuUrl: string | null },
+): Promise<void> {
+  const eventId = await createEvent(env.DB, input);
+  const message = renderOpen({ title: input.title, menu_url: input.menuUrl }, []);
+  const messageId = await postMessage(env.DISCORD_BOT_TOKEN, input.channelId, message);
+  await setMessageId(env.DB, eventId, messageId);
+}
+
+/** `/bento` は Modal を開くだけ。D1 も Discord API も触らないので即返せる */
+function handleCommand(interaction: Interaction): Response {
+  if (interaction.data?.name !== "bento") return reply("未実装");
+
+  return modal(
+    modalBody(CREATE_MODAL, "お弁当の募集", [
+      { custom_id: "title", label: "タイトル", placeholder: "9/15(月) お弁当", required: true },
+      {
+        custom_id: "menu_url",
+        label: "メニューのURL（任意）",
+        placeholder: "https://tenpo.example.com/bento",
+        required: false,
+      },
+    ]),
+  );
+}
+
+function handleModal(interaction: Interaction, env: Env, ctx: ExecutionContext): Response {
+  if (interaction.data?.custom_id !== CREATE_MODAL) return reply("未実装");
+
+  const values = modalValues(interaction.data.components);
+  const title = (values.title ?? "").trim();
+  // Modal 側でも required にしてあるが、空白だけの入力はそこを素通りする
+  if (title === "") return reply("タイトルを入力してください。");
+
+  const { guild_id: guildId, channel_id: channelId } = interaction;
+  if (!guildId || !channelId) return reply("サーバーのチャンネルで実行してください。");
+
+  const menuUrl = (values.menu_url ?? "").trim() || null;
+
+  // Discord は3秒で切る。D1 の書き込みと投稿は待たずに返し、続きは waitUntil で回す
+  ctx.waitUntil(openEvent(env, { guildId, channelId, title, menuUrl }));
+  return reply(`「${title}」の募集をこのチャンネルに出しました。`);
 }
 
 /**
@@ -103,7 +152,7 @@ async function handleNewItem(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  const fields = modalFields(interaction);
+  const fields = modalValues(interaction.data?.components);
   const itemName = (fields.item_name ?? "").trim();
   const price = parsePrice(fields.price ?? "");
   if (!itemName) return reply("品名を入れてください");
@@ -147,6 +196,9 @@ export async function handleInteraction(
     case PING:
       return pong();
 
+    case APPLICATION_COMMAND:
+      return handleCommand(interaction);
+
     case MESSAGE_COMPONENT:
       // Modal は deferred できない。DB を触らず、あとで引けるように
       // 元メッセージの id だけ持たせて即返す
@@ -154,10 +206,8 @@ export async function handleInteraction(
       return reply("未実装");
 
     case MODAL_SUBMIT:
+      if (customId === CREATE_MODAL) return handleModal(interaction, env, ctx);
       if (customId.startsWith(`${NEW_ITEM}:`)) return handleNewItem(interaction, env, ctx);
-      return reply("未実装");
-
-    case APPLICATION_COMMAND:
       return reply("未実装");
 
     default:

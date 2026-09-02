@@ -15,6 +15,12 @@ const DEFERRED_CHANNEL_MESSAGE = 5;
 const DEFERRED_UPDATE_MESSAGE = 6;
 const MODAL = 9;
 
+/** Modal の中身。テキスト欄は1つずつ action row に入れないと Discord が受け付けない */
+const ACTION_ROW = 1;
+const TEXT_INPUT = 4;
+const SHORT = 1;
+const PARAGRAPH = 2;
+
 /** 本人にしか見えないメッセージ */
 const EPHEMERAL = 64;
 
@@ -84,6 +90,50 @@ export function pong(): Response {
 /** その場で返せる短い返事。押した本人にしか見せない */
 export function reply(content: string): Response {
   return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+}
+
+/** Modal に置くテキスト欄1つぶん */
+export type TextField = {
+  custom_id: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  /** 複数行にするか */
+  paragraph?: boolean;
+};
+
+/** 品名・タイトルなど、テキスト欄の並びから Modal のボディを組み立てる */
+export function modalBody(customId: string, title: string, fields: TextField[]): MessageBody {
+  return {
+    custom_id: customId,
+    title,
+    components: fields.map((field) => ({
+      type: ACTION_ROW,
+      components: [
+        {
+          type: TEXT_INPUT,
+          style: field.paragraph ? PARAGRAPH : SHORT,
+          custom_id: field.custom_id,
+          label: field.label,
+          required: field.required,
+          placeholder: field.placeholder,
+        },
+      ],
+    })),
+  };
+}
+
+/** Modal 送信で返ってくる入れ子を custom_id → 値 にほぐす */
+export type ModalRow = { components?: { custom_id: string; value?: string }[] };
+
+export function modalValues(rows: ModalRow[] = []): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const row of rows) {
+    for (const field of row.components ?? []) {
+      values[field.custom_id] = field.value ?? "";
+    }
+  }
+  return values;
 }
 
 /**
