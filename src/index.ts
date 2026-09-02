@@ -3,9 +3,10 @@
  * ルーティングが無いのでフレームワークも入れていない。
  */
 
-import { createEvent, setMessageId } from "./db";
+import type { BentoEvent } from "./db";
+import { createEvent, getEventByMessageId, listOrders, setMessageId, setOrder } from "./db";
 import type { ModalRow } from "./discord";
-import { modal, modalValues, pong, postMessage, reply } from "./discord";
+import { ack, modal, modalValues, patchMessage, pong, postMessage, reply } from "./discord";
 import { renderOpen } from "./render";
 
 /** Discord が送ってくる interaction type のうち、使うものだけ */
@@ -17,15 +18,29 @@ const MODAL_SUBMIT = 5;
 /** `/bento` で開く Modal。送信されたときにこの custom_id で戻ってくる */
 const CREATE_MODAL = "create_event";
 
+/** `[頼む ▼]` のセレクト */
+const ORDER_SELECT = "order_select";
+
+/** 押した人。ギルド内なら member に入っていて、Discord が署名付きで送ってくる */
+type Member = {
+  nick?: string | null;
+  user?: { id?: string; username?: string; global_name?: string | null };
+};
+
 /** 受け取る側で見るところだけ書いた interaction。全部は要らない */
 type Interaction = {
   type: number;
   guild_id?: string;
   channel_id?: string;
+  member?: Member;
+  /** ボタン／セレクトが置かれていたメッセージ。これでイベントを引く */
+  message?: { id?: string };
   data?: {
     name?: string;
     custom_id?: string;
     components?: ModalRow[];
+    /** セレクトで選ばれた option の value */
+    values?: string[];
   };
 };
 
@@ -110,6 +125,65 @@ function handleModal(interaction: Interaction, env: Env, ctx: ExecutionContext):
   return reply(`「${title}」の募集をこのチャンネルに出しました。`);
 }
 
+/** 表示名。サーバー内のニックネームがあればそれを優先する */
+function nameOf(member: Member | undefined): string {
+  const user = member?.user;
+  return member?.nick || user?.global_name || user?.username || "名無し";
+}
+
+/** `[頼む ▼]` の value は `650:唐揚げ弁当`。品名に ":" が入っていても最初の1個で割れる */
+function parseItem(value: string): { itemName: string; price: number } | null {
+  const at = value.indexOf(":");
+  if (at < 0) return null;
+  const price = Number.parseInt(value.slice(0, at), 10);
+  const itemName = value.slice(at + 1);
+  if (!Number.isInteger(price) || itemName === "") return null;
+  return { itemName, price };
+}
+
+/** 注文を1件入れて、集計メッセージを描き直す。ここが `[頼む ▼]` の実体 */
+async function placeOrder(
+  env: Env,
+  event: BentoEvent,
+  messageId: string,
+  input: { discordUserId: string; displayName: string; itemName: string; price: number },
+): Promise<void> {
+  await setOrder(env.DB, { eventId: event.id, ...input });
+  const orders = await listOrders(env.DB, event.id);
+  const body = renderOpen(event, orders);
+  await patchMessage(env.DISCORD_BOT_TOKEN, event.channel_id, messageId, body);
+}
+
+/** ボタンとセレクト。いまは `[頼む ▼]` だけ */
+async function handleComponent(
+  interaction: Interaction,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  if (interaction.data?.custom_id !== ORDER_SELECT) return reply("未実装");
+
+  const item = parseItem(interaction.data.values?.[0] ?? "");
+  const userId = interaction.member?.user?.id;
+  const messageId = interaction.message?.id;
+  if (!item || !userId || !messageId) return reply("注文できませんでした。");
+
+  // 締め切り済みかどうかはここで見る。ack で返してしまうと拒否を伝える先が無くなる。
+  // D1 の読み1回なら3秒に収まる
+  const event = await getEventByMessageId(env.DB, messageId);
+  if (!event) return reply("この募集は見つかりませんでした。");
+  if (event.status === "closed") return reply("この募集はもう締め切られています。");
+
+  // 書き込みと Discord への PATCH は待たない
+  ctx.waitUntil(
+    placeOrder(env, event, messageId, {
+      discordUserId: userId,
+      displayName: nameOf(interaction.member),
+      ...item,
+    }),
+  );
+  return ack();
+}
+
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Discord は POST しか投げてこない。それ以外は受け付けない
@@ -136,9 +210,7 @@ export default {
         return handleModal(interaction, env, ctx);
 
       case MESSAGE_COMPONENT:
-        // ここから先が本体。重い処理を挟むなら discord.ts の deferred(ctx, work) を
-        // 返して、あとで patchMessage で元メッセージを差し替える
-        return reply("未実装");
+        return handleComponent(interaction, env, ctx);
 
       default:
         return new Response("unknown interaction type", { status: 400 });

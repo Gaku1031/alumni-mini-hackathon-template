@@ -12,6 +12,7 @@ const API = "https://discord.com/api/v10";
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 const DEFERRED_CHANNEL_MESSAGE = 5;
+const DEFERRED_UPDATE_MESSAGE = 6;
 const MODAL = 9;
 
 /** Modal の中身。テキスト欄は1つずつ action row に入れないと Discord が受け付けない */
@@ -89,6 +90,15 @@ export function pong(): Response {
 /** その場で返せる短い返事。押した本人にしか見せない */
 export function reply(content: string): Response {
   return json({ type: CHANNEL_MESSAGE, data: { content, flags: EPHEMERAL } });
+}
+
+/**
+ * 押されたことだけ受け取って、その場には何も出さない応答（ボタン／セレクト用）。
+ * 見た目は元メッセージの patchMessage で変わるので、type:5 のように
+ * 「考え中…」を出してしまうと、消えない吹き出しが残る。
+ */
+export function ack(): Response {
+  return json({ type: DEFERRED_UPDATE_MESSAGE });
 }
 
 /** Modal に置くテキスト欄1つぶん */
