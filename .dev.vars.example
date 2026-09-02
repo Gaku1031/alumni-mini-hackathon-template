@@ -1,8 +1,12 @@
+# このファイルを .dev.vars にコピーして値を書く（.dev.vars は gitignore 済み。コミットしない）。
+# 本番はここではなく `npx wrangler secret put <名前>`。wrangler.jsonc の vars には書かない。
+
 # Discord Developer Portal > General Information > Public Key
 DISCORD_PUBLIC_KEY=
 # Bot > Token（集計メッセージを PATCH するのに使う）
 DISCORD_BOT_TOKEN=
-# General Information > Application ID（`npm run register` だけが使う。Worker は使わない）
-DISCORD_APPLICATION_ID=
-# 開発中にコマンドを1サーバーだけへ即時反映したいとき（空ならグローバル登録）
-DISCORD_GUILD_ID=
+
+# Worker が使う secret はこの2つだけ。
+# `npm run register` に要る APPLICATION ID / GUILD ID は Worker の secret ではないので、
+# 実行時に環境変数で渡す（README の「スラッシュコマンドを登録する」を参照）:
+#   DISCORD_APPLICATION_ID=... npm run register
