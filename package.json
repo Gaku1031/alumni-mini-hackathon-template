@@ -14,7 +14,8 @@
     "check": "biome check .",
     "check:fix": "biome check --write .",
     "types": "wrangler types",
-    "postinstall": "wrangler types"
+    "postinstall": "wrangler types",
+    "discord:register": "node scripts/register-commands.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

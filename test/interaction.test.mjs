@@ -7,7 +7,7 @@
  * 事前に `npm run dev` を別ターミナルで起動しておく（.dev.vars はこれが書く）。
  */
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
@@ -49,6 +49,11 @@ let savedDevVars = null;
 before(async () => {
   if (existsSync(".dev.vars")) savedDevVars = readFileSync(".dev.vars");
   writeFileSync(".dev.vars", `DISCORD_PUBLIC_KEY=${publicKeyHex}\nDISCORD_BOT_TOKEN=dummy\n`);
+
+  // ローカルの D1 にテーブルが無いとハンドラが落ちる。冪等なので毎回打つ
+  execFileSync("npx", ["wrangler", "d1", "migrations", "apply", "bento", "--local"], {
+    stdio: "ignore",
+  });
 
   const port = await freePort();
   URL_ = `http://127.0.0.1:${port}`;
@@ -99,4 +104,17 @@ test("ボディを差し替えたら 401（署名対象は生ボディ）", asyn
   const headers = signed(JSON.stringify({ type: 1 }));
   const res = await fetch(URL_, { method: "POST", headers, body: JSON.stringify({ type: 2 }) });
   assert.equal(res.status, 401);
+});
+
+test("存在しないイベントのボタンを押しても落ちない（署名→ルーティング→D1）", async () => {
+  const body = JSON.stringify({
+    type: 3,
+    data: { custom_id: "pay:no-such-event", component_type: 2 },
+    member: { user: { id: "1", username: "tester" } },
+  });
+  const res = await fetch(URL_, { method: "POST", headers: signed(body), body });
+  assert.equal(res.status, 200);
+  const out = await res.json();
+  assert.equal(out.type, 4);
+  assert.match(out.data.content, /もうありません/);
 });

@@ -9,7 +9,7 @@
       "binding": "DB",
       "database_name": "bento",
       // `npm run db:create` の出力を貼る
-      "database_id": "PLACEHOLDER",
+      "database_id": "7fa7c0fe-282e-4d85-afaf-1fba0b292e00",
       "migrations_dir": "migrations"
     }
   ]

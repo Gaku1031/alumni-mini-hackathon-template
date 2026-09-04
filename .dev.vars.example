@@ -2,3 +2,10 @@
 DISCORD_PUBLIC_KEY=
 # Bot > Token（集計メッセージを PATCH するのに使う）
 DISCORD_BOT_TOKEN=
+
+# ↓ ここから下は scripts/register-commands.mjs だけが読む。Worker には渡らない
+# General Information > Application ID
+DISCORD_APP_ID=
+# テスト用サーバーのID（開発者モードON → サーバー名を右クリック → IDをコピー）。
+# 入れるとそのサーバーだけに即時反映される。空だと全サーバー向けで最大1時間かかる
+DISCORD_GUILD_ID=

@@ -64,7 +64,52 @@ npm run db:apply:remote        # 本番の D1 にテーブルを作る（ロー�
 保存を押すと Discord が疎通確認を投げてくる。**署名検証が通らないと保存できない**。
 ここが最初の関門で、`src/index.ts` には通る実装が入っている。
 
-### 4. ローカル開発
+### 4. Bot をサーバーに入れて、コマンドを登録する
+
+**Installation** タブの `INSTALL LINK` を開いてサーバーに追加する。
+権限は **Send Messages**（集計メッセージを投稿する）と **Read Message History** があればよい。
+pin を bot にやらせないので `Manage Messages` は要らない。
+
+`/bento` は登録しないと Discord 上に出てこない。`.dev.vars` に2つ足してから登録する。
+
+```
+DISCORD_APP_ID=          # General Information の APPLICATION ID
+DISCORD_GUILD_ID=        # テスト用サーバーのID（下記）
+```
+
+`DISCORD_GUILD_ID` は「ユーザー設定 → 詳細設定 → 開発者モード」をONにしてから、
+サーバー名を右クリック →「サーバーIDをコピー」。
+
+```bash
+npm run discord:register
+```
+
+**GUILD_ID を入れるとそのサーバーだけに即時反映される。**
+空にすると全サーバー向けになり、反映に最大1時間かかる。テスト中は必ず入れる。
+
+コマンドの定義（`scripts/register-commands.mjs`）を変えたときだけ打ち直せばよい。
+Worker のコードを変えただけなら `npm run deploy` だけでいい。
+
+### 5. Discord で動かす
+
+```
+/bento title:9/15(月) お弁当 menu:https://... paypay:https://paypay.me/xxxx
+```
+
+集計メッセージが投稿される。あとはボタンだけで完結する。
+
+1. `[新しく入力]` で品名と金額を入れる → 行が増える
+2. 2人目からは `[頼む ▼]` に既出の品が並ぶ（**注文がそのままメニューになる**）
+3. `[取り消す ▼]` で誰の注文でも消せる
+4. `[締め切る]` → Modal に `配送料 500` のように1行ずつ入れる（空でもいい）
+   → 均等割した実額に書き変わり、`@here` が1回だけ飛ぶ
+5. `[支払った]` で自分が消える。`[未払いに戻す ▼]` で戻せる
+
+`paypay` は一度渡せば `guild_settings` に残るので、次回から省略できる。
+
+同じ人が2回頼むと**上書き**になる（1人1個。`unique(event_id, discord_user_id)`）。
+
+### 6. ローカル開発
 
 ```bash
 cp .dev.vars.example .dev.vars   # DISCORD_PUBLIC_KEY / DISCORD_BOT_TOKEN を書く
@@ -162,6 +207,8 @@ VS Code なら拡張機能「Biome」を入れるだけで動く。
 | 本番だけ `no such table` | `npm run db:apply:remote` を打っていない |
 | Bot が「アプリケーションが応答しませんでした」 | 3秒を超えている。`type: 5` を先に返す形に変える |
 | `env.DB is undefined` | `wrangler.jsonc` の `database_id` が `PLACEHOLDER` のまま |
+| `/bento` が候補に出ない | `npm run discord:register` を打っていない。`DISCORD_GUILD_ID` を空で登録すると最大1時間かかる |
+| 集計メッセージが投稿されない | Bot に Send Messages 権限が無いか、`DISCORD_BOT_TOKEN` が本番の secret に入っていない |
 | 型が古い | `npm run types`（`wrangler types` の生成物が `worker-configuration.d.ts`） |
 
 ---
@@ -177,5 +224,6 @@ VS Code なら拡張機能「Biome」を入れるだけで動く。
 | `npm run db:apply` | ローカルの D1 にマイグレーションを適用 |
 | `npm run db:apply:remote` | 本番の D1 にマイグレーションを適用 |
 | `npm run db:console -- "<SQL>"` | ローカルの D1 に SQL を投げる |
+| `npm run discord:register` | `/bento` を Discord に登録する |
 | `npm run types` | binding から TypeScript の型を再生成 |
 | `npm run check` / `check:fix` | Biome |
