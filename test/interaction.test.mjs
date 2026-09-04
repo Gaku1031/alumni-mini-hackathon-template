@@ -122,6 +122,13 @@ function counted(content) {
   return [...content.matchAll(/×(\d+)/g)].reduce((s, m) => s + Number(m[1]), 0);
 }
 
+/** custom_id の頭が action のコンポーネントを1つ返す */
+function comp(components, action) {
+  return components
+    .flatMap((row) => row.components)
+    .find((c) => c.custom_id.startsWith(`${action}:`));
+}
+
 /** ボタン・セレクトの custom_id を全部平らに並べる */
 function ids(components) {
   return components.flatMap((row) => row.components.map((c) => c.custom_id.split(":")[0]));
@@ -148,12 +155,17 @@ before(async () => {
   // イベントは wrangler 越しの SQL が遅いので、必要な数をまとめて1回で作る。
   // `/bento` 本体は Discord へメッセージを投稿するので、そこはここでは通さない
   const stmts = ["delete from bento_orders", "delete from bento_events"];
-  for (let i = 0; i < 40; i++) {
+  for (let i = 0; i < 60; i++) {
     stmts.push(
-      `insert into bento_events (id, guild_id, channel_id, title, menu_url, created_at)
-       values ('ev-${i}', '${G}', 'chan-1', '9/15(月) お弁当', 'https://example.com/menu', '2026-02-0${(i % 9) + 1}')`,
+      `insert into bento_events (id, guild_id, channel_id, title, created_at)
+       values ('ev-${i}', '${G}', 'chan-1', '9/15(月) お弁当', '2026-02-0${(i % 9) + 1}')`,
     );
   }
+  // /bento の引数でメニューを入れて作られた状態
+  stmts.push(
+    `insert into bento_events (id, guild_id, channel_id, title, menu_url, created_at)
+     values ('with-menu', '${G}', 'chan-1', '9/15(月) お弁当', 'https://example.com/menu', '2026-02-01')`,
+  );
   // 支払先の初期値テスト用。同じサーバーの「前回」に値が入っている状態を作る
   stmts.push(
     `insert into bento_events (id, guild_id, channel_id, title, payment_info, created_at)
@@ -255,7 +267,7 @@ describe("注文を入れる", () => {
   });
 
   test("メニューのURLを入れておくと集計メッセージから開ける", async () => {
-    const { content } = await board(nextEvent());
+    const { content } = await board("with-menu");
     assert.match(content, /📎 メニュー: https:\/\/example\.com\/menu/);
   });
 
@@ -370,6 +382,60 @@ describe("注文を入れる", () => {
 });
 
 // ── 締め切りと支払先 ──────────────────────────────────────────────
+
+describe("メニューのリンク", () => {
+  // /bento の任意引数は Discord の UI に埋もれる。ボタン側から辿れることが本題
+  test("未設定なら『メニューを貼る』、設定済みなら『メニューを変える』", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800);
+    assert.equal(comp((await board(ev)).components, "menu").label, "メニューを貼る");
+
+    await submit(ev, "domenu", { menu_url: "https://example.com/menu.pdf" });
+    assert.equal(comp((await board(ev)).components, "menu").label, "メニューを変える");
+  });
+
+  test("ボタンから貼ると集計に出る", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800);
+    await submit(ev, "domenu", { menu_url: "https://example.com/menu.pdf" });
+    assert.match((await board(ev)).content, /メニュー: https:\/\/example\.com\/menu\.pdf/);
+  });
+
+  test("モーダルには今の値が入っている", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800);
+    await submit(ev, "domenu", { menu_url: "https://example.com/a.pdf" });
+    const modal = await button(ev, "menu");
+    assert.equal(modal.type, 9);
+    assert.equal(modal.data.components[0].components[0].value, "https://example.com/a.pdf");
+  });
+
+  test("https:// を省いても補われる", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800);
+    await submit(ev, "domenu", { menu_url: "example.com/menu" });
+    assert.match((await board(ev)).content, /https:\/\/example\.com\/menu/);
+  });
+
+  test("空で送ると消える", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800);
+    await submit(ev, "domenu", { menu_url: "https://example.com/menu.pdf" });
+    await submit(ev, "domenu", { menu_url: "  " });
+    assert.doesNotMatch((await board(ev)).content, /メニュー/);
+    assert.equal(comp((await board(ev)).components, "menu").label, "メニューを貼る");
+  });
+
+  test("締め切ったあとは貼れない", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800);
+    await submit(ev, "doclose", { shared: "", payment: "" });
+    const res = await button(ev, "menu");
+    assert.equal(res.type, 4);
+    assert.match(res.data.content, /締め切られています/);
+    assert.equal(comp((await board(ev, true)).components, "menu"), undefined);
+  });
+});
 
 describe("締め切る", () => {
   test("締め切りモーダルに割り勘と支払先の欄が出る", async () => {
@@ -570,7 +636,7 @@ describe("集金する", () => {
     await order(ev, "唐揚げ弁当", 650, { user: "u1" });
     await submit(ev, "doclose", { shared: "配送料 500", payment: "PayPay 090-1" });
     const res = await button(ev, "reopen");
-    assert.deepEqual(ids(res.data.components), ["pick", "cancel", "new", "close"]);
+    assert.deepEqual(ids(res.data.components), ["pick", "cancel", "new", "menu", "close"]);
     assert.equal(counted(res.data.content), 1);
     // 開いている間は割り勘も支払先も出さない
     assert.doesNotMatch(res.data.content, /均等割/);

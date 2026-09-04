@@ -31,13 +31,13 @@ if (!DISCORD_APP_ID || !DISCORD_BOT_TOKEN) {
 const commands = [
   {
     name: "bento",
-    description: "お弁当の注文をはじめる",
+    description: "お弁当の注文をはじめる。メニューのURLも貼れる（あとから貼ってもいい）",
     options: [
       { type: 3, name: "title", description: "例: 9/15(月) お弁当", required: true },
       {
         type: 3,
         name: "menu",
-        description: "メニューのURL。頼む人がこれを開いて品名を決める（無くてもいい）",
+        description: "メニューのURL。空でもよく、あとから「メニューを貼る」で足せる",
         required: false,
       },
     ],

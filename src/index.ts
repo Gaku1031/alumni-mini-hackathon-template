@@ -243,6 +243,13 @@ function components(ev: BentoEvent, orders: BentoOrder[]) {
       type: 1,
       components: [
         { type: 2, style: 1, label: "新しく入力", custom_id: `new:${ev.id}` },
+        // 未設定のときは「貼る」と出して、メニューを付けられること自体を知らせる
+        {
+          type: 2,
+          style: 2,
+          label: ev.menu_url ? "メニューを変える" : "メニューを貼る",
+          custom_id: `menu:${ev.id}`,
+        },
         { type: 2, style: 4, label: "締め切る", custom_id: `close:${ev.id}` },
       ],
     });
@@ -370,6 +377,38 @@ function createEvent(interaction: any, env: Env, ctx: ExecutionContext) {
   return json({ type: DEFERRED_CHANNEL_MESSAGE, data: { flags: EPHEMERAL } });
 }
 
+/**
+ * メニューURLの入力欄。/bento の任意引数は Discord の UI では気づかれにくいので、
+ * 集計メッセージのボタンからも貼れるようにしてある。
+ */
+function menuModal(eventId: string, current: string | null) {
+  return json({
+    type: MODAL,
+    data: {
+      custom_id: `domenu:${eventId}`,
+      title: "メニューのリンク",
+      components: [
+        {
+          type: 1,
+          components: [
+            {
+              type: 4,
+              custom_id: "menu_url",
+              label: "URL",
+              style: 1,
+              placeholder: "https://example.com/menu.pdf",
+              max_length: 400,
+              // 空で送ると消せる。貼り間違えたときに直せないと困る
+              required: false,
+              value: current ?? undefined,
+            },
+          ],
+        },
+      ],
+    },
+  });
+}
+
 /** 品名と金額の入力欄。custom_id に event_id を載せて次の MODAL_SUBMIT まで運ぶ */
 function itemModal(eventId: string) {
   return json({
@@ -493,7 +532,7 @@ async function handleComponent(interaction: any, env: Env) {
   // 状態と、締め切りモーダルの初期値を1回で引く。
   // last_payment は「このイベントの支払先、無ければ同じサーバーで最後に使った支払先」
   const ev = await env.DB.prepare(
-    `select e.status,
+    `select e.status, e.menu_url,
             coalesce(e.payment_info,
               (select p.payment_info from bento_events p
                 where p.guild_id = e.guild_id and p.payment_info is not null
@@ -501,12 +540,13 @@ async function handleComponent(interaction: any, env: Env) {
        from bento_events e where e.id = ?`,
   )
     .bind(eventId)
-    .first<{ status: "open" | "closed"; last_payment: string | null }>();
+    .first<{ status: "open" | "closed"; menu_url: string | null; last_payment: string | null }>();
   if (!ev) return gone();
 
   // 集計メッセージが古いまま押されることがある。締め切り済みに注文を入れさせない、
   // 締め切り前に集金を触らせない。ボタンの見た目ではなく DB の状態で決める
-  const whileOpen = action === "new" || action === "pick" || action === "cancel";
+  const whileOpen =
+    action === "new" || action === "pick" || action === "cancel" || action === "menu";
   if ((whileOpen || action === "close") && ev.status === "closed") {
     return reply("この募集はもう締め切られています。");
   }
@@ -520,6 +560,9 @@ async function handleComponent(interaction: any, env: Env) {
 
     case "close":
       return closeModal(eventId, ev.last_payment);
+
+    case "menu":
+      return menuModal(eventId, ev.menu_url);
 
     case "reopen":
       await env.DB.prepare("update bento_events set status = 'open' where id = ?")
@@ -581,6 +624,16 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
     const price = toNumber(modalValue(interaction, "price"));
     if (!name || Number.isNaN(price)) return reply("品名と金額（数字）を入れてください。");
     await upsertOrder(env, interaction, eventId, name, price);
+    return updated(env, eventId);
+  }
+
+  if (action === "domenu") {
+    const url = modalValue(interaction, "menu_url").trim();
+    // 空なら消す。https:// を付け忘れると Discord がリンクにしないので補う
+    const normalized = url === "" ? null : /^https?:\/\//i.test(url) ? url : `https://${url}`;
+    await env.DB.prepare("update bento_events set menu_url = ? where id = ? and status = 'open'")
+      .bind(normalized, eventId)
+      .run();
     return updated(env, eventId);
   }
 
