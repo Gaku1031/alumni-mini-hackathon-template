@@ -100,6 +100,23 @@ function submit(eventId, action, fields, { user = "u1", name = "たろう" } = {
   });
 }
 
+/** 代理入力（ユーザーセレクトで相手を選ぶ → モーダル送信）。相手の表示名は resolved で届く */
+function pickUser(eventId, targetId, targetName, who = {}) {
+  const { user = "u1", name = "たろう" } = who;
+  return send({
+    type: 3,
+    guild_id: G,
+    channel_id: "chan-1",
+    data: {
+      custom_id: `proxy:${eventId}`,
+      component_type: 5,
+      values: [targetId],
+      resolved: { users: { [targetId]: { id: targetId, username: targetName } } },
+    },
+    member: { user: { id: user, username: name } },
+  });
+}
+
 /** 注文を1件入れる（「新しく入力」→ モーダル送信 の実際の流れ） */
 function order(eventId, itemName, price, who) {
   return submit(eventId, "newitem", { item_name: itemName, price: String(price) }, who);
@@ -383,6 +400,62 @@ describe("注文を入れる", () => {
 
 // ── 締め切りと支払先 ──────────────────────────────────────────────
 
+describe("代理で入れる", () => {
+  /** 相手を選ぶ → 戻ってきたモーダルをそのまま送る、という実際の流れ */
+  async function orderFor(eventId, target, targetName, itemName, price, who) {
+    const modal = await pickUser(eventId, target, targetName, who);
+    assert.equal(modal.type, 9);
+    const forName = modal.data.components[0].components[0].value;
+    return submit(
+      `${eventId}:${target}`,
+      "newitem",
+      { for_name: forName, item_name: itemName, price: String(price) },
+      who,
+    );
+  }
+
+  test("相手を選ぶと「誰の分」が埋まったモーダルが返る", async () => {
+    const res = await pickUser(nextEvent(), "u9", "じろう");
+    assert.equal(res.type, 9);
+    assert.deepEqual(
+      res.data.components.flatMap((r) => r.components.map((c) => c.custom_id)),
+      ["for_name", "item_name", "price"],
+    );
+    assert.equal(res.data.components[0].components[0].value, "じろう");
+  });
+
+  test("代理で入れた分は本人の名前で載り、入れた人もわかる", async () => {
+    const ev = nextEvent();
+    const res = await orderFor(ev, "u9", "じろう", "唐揚げ弁当", 650, {
+      user: "u1",
+      name: "たろう",
+    });
+    assert.match(res.data.content, /- 唐揚げ弁当\s+¥650\s+×1\s+じろう（たろうが代理入力）/);
+  });
+
+  test("代理で入れた分は本人が「支払った」を押せる", async () => {
+    const ev = nextEvent();
+    await orderFor(ev, "u9", "じろう", "唐揚げ弁当", 650, { user: "u1", name: "たろう" });
+    await submit(ev, "doclose", { shared: "", payment: "" });
+    const res = await button(ev, "pay", { user: "u9", name: "じろう" });
+    assert.match(res.data.content, /\*\*集金\*\* 1\/1/);
+  });
+
+  test("本人があとから自分で入れ直すと1件のままで、代理の跡も消える", async () => {
+    const ev = nextEvent();
+    await orderFor(ev, "u9", "じろう", "唐揚げ弁当", 650, { user: "u1", name: "たろう" });
+    const res = await order(ev, "そば", 500, { user: "u9", name: "じろう" });
+    assert.equal(counted(res.data.content), 1);
+    assert.match(res.data.content, /- そば\s+¥500\s+×1\s+じろう$/m);
+  });
+
+  test("自分を選んで入れても代理扱いにはしない", async () => {
+    const ev = nextEvent();
+    const res = await orderFor(ev, "u1", "たろう", "そば", 500, { user: "u1", name: "たろう" });
+    assert.doesNotMatch(res.data.content, /代理入力/);
+  });
+});
+
 describe("メニューのリンク", () => {
   // /bento の任意引数は Discord の UI に埋もれる。ボタン側から辿れることが本題
   test("未設定なら『メニューを貼る』、設定済みなら『メニューを変える』", async () => {
@@ -639,7 +712,7 @@ describe("集金する", () => {
     await order(ev, "唐揚げ弁当", 650, { user: "u1" });
     await submit(ev, "doclose", { shared: "配送料 500", payment: "PayPay 090-1" });
     const res = await button(ev, "reopen");
-    assert.deepEqual(ids(res.data.components), ["pick", "cancel", "new", "menu", "close"]);
+    assert.deepEqual(ids(res.data.components), ["pick", "cancel", "proxy", "new", "menu", "close"]);
     assert.equal(counted(res.data.content), 1);
     // 開いている間は割り勘も支払先も出さない
     assert.doesNotMatch(res.data.content, /均等割/);

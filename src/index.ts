@@ -41,6 +41,8 @@ type BentoOrder = {
   item_name: string;
   price: number;
   paid: number;
+  /** 代わりに入力した人の表示名。null なら本人が自分で入れた */
+  ordered_by: string | null;
 };
 
 type SharedCost = { label: string; amount: number };
@@ -160,7 +162,9 @@ function render(ev: BentoEvent, orders: BentoOrder[]) {
       closed && perHead > 0
         ? `${yen(o.price)} + ${yen(perHead)} = **${yen(o.price + perHead)}**`
         : yen(o.price);
-    const names = list.map((x) => x.display_name).join(", ");
+    const names = list
+      .map((x) => (x.ordered_by ? `${x.display_name}（${x.ordered_by}が代理入力）` : x.display_name))
+      .join(", ");
     lines.push(`- ${o.item_name}  ${amount}  ×${list.length}  ${names}`);
   }
 
@@ -238,6 +242,19 @@ function components(ev: BentoEvent, orders: BentoOrder[]) {
         ],
       });
     }
+
+    // type 5 はユーザーセレクト。選択肢はサーバーの参加者から Discord が出す。
+    // 選んだ相手は次の MODAL の custom_id に載せて運ぶ
+    rows.push({
+      type: 1,
+      components: [
+        {
+          type: 5,
+          custom_id: `proxy:${ev.id}`,
+          placeholder: "代わりに入力する（後から来る人の分）",
+        },
+      ],
+    });
 
     rows.push({
       type: 1,
@@ -412,14 +429,38 @@ function menuModal(eventId: string, current: string | null) {
   });
 }
 
-/** 品名と金額の入力欄。custom_id に event_id を載せて次の MODAL_SUBMIT まで運ぶ */
-function itemModal(eventId: string) {
+/**
+ * 品名と金額の入力欄。custom_id に event_id を載せて次の MODAL_SUBMIT まで運ぶ。
+ *
+ * 代理入力のときは相手の user_id も載せる。MODAL_SUBMIT には選んだ相手の情報が
+ * 付いてこないので、表示名は初期値付きの入力欄に入れて一緒に戻ってくるようにする
+ * （Discord に問い合わせ直さずに済むし、押した人は誰の分か見て確かめられる）。
+ */
+function itemModal(eventId: string, target?: { id: string; name: string }) {
   return json({
     type: MODAL,
     data: {
-      custom_id: `newitem:${eventId}`,
-      title: "注文を入力",
+      custom_id: target ? `newitem:${eventId}:${target.id}` : `newitem:${eventId}`,
+      title: target ? "代わりに入力" : "注文を入力",
       components: [
+        ...(target
+          ? [
+              {
+                type: 1,
+                components: [
+                  {
+                    type: 4,
+                    custom_id: "for_name",
+                    label: "誰の分",
+                    style: 1,
+                    max_length: 32,
+                    value: target.name,
+                    required: true,
+                  },
+                ],
+              },
+            ]
+          : []),
         {
           type: 1,
           components: [
@@ -507,24 +548,30 @@ function modalValue(interaction: any, id: string): string {
   return "";
 }
 
-/** 注文を1件入れる。unique(event_id, discord_user_id) があるので2回目は上書きになる */
+/**
+ * 注文を1件入れる。unique(event_id, discord_user_id) があるので2回目は上書きになる。
+ * userId は「頼む本人」であって、押した人とは限らない（代理入力）。
+ * 本人があとから自分で入れ直せば ordered_by も消えて、代理の跡が残らない。
+ */
 async function upsertOrder(
   env: Env,
-  // biome-ignore lint/suspicious/noExplicitAny: 同上
-  interaction: any,
   eventId: string,
+  targetUserId: string,
+  targetName: string,
   name: string,
   price: number,
+  orderedBy: string | null,
 ) {
   await env.DB.prepare(
-    `insert into bento_orders (id, event_id, discord_user_id, display_name, item_name, price)
-     values (?, ?, ?, ?, ?, ?)
+    `insert into bento_orders (id, event_id, discord_user_id, display_name, item_name, price, ordered_by)
+     values (?, ?, ?, ?, ?, ?, ?)
      on conflict(event_id, discord_user_id) do update set
        display_name = excluded.display_name,
        item_name = excluded.item_name,
-       price = excluded.price`,
+       price = excluded.price,
+       ordered_by = excluded.ordered_by`,
   )
-    .bind(crypto.randomUUID(), eventId, userId(interaction), displayName(interaction), name, price)
+    .bind(crypto.randomUUID(), eventId, targetUserId, targetName, name, price, orderedBy)
     .run();
 }
 
@@ -546,7 +593,11 @@ async function handleComponent(interaction: any, env: Env) {
   // 集計メッセージが古いまま押されることがある。締め切り済みに注文を入れさせない、
   // 締め切り前に集金を触らせない。ボタンの見た目ではなく DB の状態で決める
   const whileOpen =
-    action === "new" || action === "pick" || action === "cancel" || action === "menu";
+    action === "new" ||
+    action === "proxy" ||
+    action === "pick" ||
+    action === "cancel" ||
+    action === "menu";
   if ((whileOpen || action === "close") && ev.status === "closed") {
     return reply("この募集はもう締め切られています。");
   }
@@ -557,6 +608,15 @@ async function handleComponent(interaction: any, env: Env) {
   switch (action) {
     case "new":
       return itemModal(eventId);
+
+    case "proxy": {
+      // ユーザーセレクトの選択結果。表示名は resolved に付いてくる
+      const id: string = interaction.data.values[0];
+      const r = interaction.data.resolved;
+      const name =
+        r?.members?.[id]?.nick || r?.users?.[id]?.global_name || r?.users?.[id]?.username || "?";
+      return itemModal(eventId, { id, name });
+    }
 
     case "close":
       return closeModal(eventId, ev.payment_info);
@@ -575,7 +635,15 @@ async function handleComponent(interaction: any, env: Env) {
       const raw: string = interaction.data.values[0];
       const sep = raw.indexOf(":");
       const price = Number.parseInt(raw.slice(0, sep), 10);
-      await upsertOrder(env, interaction, eventId, raw.slice(sep + 1), price);
+      await upsertOrder(
+        env,
+        eventId,
+        userId(interaction),
+        displayName(interaction),
+        raw.slice(sep + 1),
+        price,
+        null,
+      );
       return updated(env, eventId);
     }
 
@@ -609,7 +677,7 @@ async function handleComponent(interaction: any, env: Env) {
 
 // biome-ignore lint/suspicious/noExplicitAny: Discord の interaction は形が type ごとに変わる
 async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
-  const [action, eventId] = interaction.data.custom_id.split(":");
+  const [action, eventId, targetId] = interaction.data.custom_id.split(":");
 
   // モーダルは開いたまま放置できる。送信されたときには締め切り済みかもしれない
   const ev = await env.DB.prepare("select status from bento_events where id = ?")
@@ -623,7 +691,19 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
     // 金額の上限は決めない。表に出るので人間が気づく（合意メモ）
     const price = toNumber(modalValue(interaction, "price"));
     if (!name || Number.isNaN(price)) return reply("品名と金額（数字）を入れてください。");
-    await upsertOrder(env, interaction, eventId, name, price);
+    // 代理入力なら custom_id に相手の user_id が載っている。自分を選んだときは
+    // 代理扱いにしない
+    const self = userId(interaction);
+    const proxied = targetId !== undefined && targetId !== self;
+    await upsertOrder(
+      env,
+      eventId,
+      proxied ? targetId : self,
+      proxied ? modalValue(interaction, "for_name") || "unknown" : displayName(interaction),
+      name,
+      price,
+      proxied ? displayName(interaction) : null,
+    );
     return updated(env, eventId);
   }
 
