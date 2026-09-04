@@ -31,6 +31,8 @@ type BentoEvent = {
   shared_costs: string;
   /** 締め切るときに幹事が入れる送金先。PayPayのリンクでも電話番号でも口座でもいい */
   payment_info: string | null;
+  /** 締め切りを知らせた @here のメッセージ。再開したときに書き換える先 */
+  notice_message_id: string | null;
 };
 
 type BentoOrder = {
@@ -589,7 +591,7 @@ function orderStmt(
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Discord の interaction は形が type ごとに変わる
-async function handleComponent(interaction: any, env: Env) {
+async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext) {
   const [action, eventId] = interaction.data.custom_id.split(":");
 
   // 状態と、締め切りモーダルの初期値を1回で引く。
@@ -597,10 +599,15 @@ async function handleComponent(interaction: any, env: Env) {
   // 支払先は他のイベントから引き継がない。引き継ぐと、用の済んだ送金先が
   // サーバー単位でいつまでも残ってしまう
   const ev = await env.DB.prepare(
-    "select status, menu_url, payment_info from bento_events where id = ?",
+    "select status, menu_url, payment_info, notice_message_id from bento_events where id = ?",
   )
     .bind(eventId)
-    .first<{ status: "open" | "closed"; menu_url: string | null; payment_info: string | null }>();
+    .first<{
+      status: "open" | "closed";
+      menu_url: string | null;
+      payment_info: string | null;
+      notice_message_id: string | null;
+    }>();
   if (!ev) return gone();
 
   // 集計メッセージが古いまま押されることがある。締め切り済みに注文を入れさせない、
@@ -638,10 +645,26 @@ async function handleComponent(interaction: any, env: Env) {
       return menuModal(eventId, ev.menu_url);
 
     case "reopen":
+      // 「締め切りました」を残すと、あとから見た人は締め切られたと思う。
+      // 通知を増やさず、同じ1本を書き換える。消えるより経緯が残るほうがいい
+      if (ev.notice_message_id) {
+        ctx.waitUntil(
+          discord(
+            `/channels/${interaction.channel_id}/messages/${ev.notice_message_id}`,
+            env.DISCORD_BOT_TOKEN,
+            {
+              method: "PATCH",
+              body: JSON.stringify({ content: "締め切りを取り消しました。まだ入れられます。" }),
+            },
+          ).catch(() => {}),
+        );
+      }
       return updated(
         env,
         eventId,
-        env.DB.prepare("update bento_events set status = 'open' where id = ?").bind(eventId),
+        env.DB.prepare(
+          "update bento_events set status = 'open', notice_message_id = null where id = ?",
+        ).bind(eventId),
       );
 
     case "pick": {
@@ -779,10 +802,20 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
     const res = json({ type: UPDATE_MESSAGE, data: b.data });
     // 締め切りだけは1回だけ通知する。以降の未払いの催促は表示のみで通知しない
     ctx.waitUntil(
-      discord(`/channels/${interaction.channel_id}/messages`, env.DISCORD_BOT_TOKEN, {
-        method: "POST",
-        body: JSON.stringify({ content: "@here 注文を締め切りました。集金をお願いします。" }),
-      }).catch(() => {}),
+      (async () => {
+        const msg = (await discord(
+          `/channels/${interaction.channel_id}/messages`,
+          env.DISCORD_BOT_TOKEN,
+          {
+            method: "POST",
+            body: JSON.stringify({ content: "@here 注文を締め切りました。集金をお願いします。" }),
+          },
+        )) as { id: string };
+        // 再開のときに書き換える先。控え損ねても締め切り自体は成立している
+        await env.DB.prepare("update bento_events set notice_message_id = ? where id = ?")
+          .bind(msg.id, eventId)
+          .run();
+      })().catch(() => {}),
     );
     return res;
   }
@@ -808,7 +841,7 @@ export default {
       case APPLICATION_COMMAND:
         return createEvent(interaction, env, ctx);
       case MESSAGE_COMPONENT:
-        return handleComponent(interaction, env);
+        return handleComponent(interaction, env, ctx);
       case MODAL_SUBMIT:
         return handleModal(interaction, env, ctx);
       default:

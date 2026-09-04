@@ -726,6 +726,22 @@ describe("集金する", () => {
     const added = await order(ev, "そば", 500, { user: "u2", name: "はなこ" });
     assert.equal(counted(added.data.content), 2);
   });
+
+  // 「@here 締め切りました」を残すと、あとから見た人が締め切られたと思う。
+  // 再開したらその通知を書き換えにいくが、消されていれば Discord は 404 を返す。
+  // 通知を直せなかっただけで再開そのものが落ちてはいけない
+  test("締め切り通知を書き換えられなくても再開は通る", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 650);
+    await submit(ev, "doclose", { shared: "", payment: "" });
+    sql(`update bento_events set notice_message_id = 'no-such-message' where id = '${ev}'`);
+
+    const res = await button(ev, "reopen");
+    assert.equal(res.type, 7);
+    assert.doesNotMatch(res.data.content, /集金/);
+    // 書き換え先は使い切り。次に締め切ったときの通知で入れ直す
+    assert.equal(counted(res.data.content), 1);
+  });
 });
 
 // ── Discord 側の上限 ──────────────────────────────────────────────
