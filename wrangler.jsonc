@@ -7,9 +7,11 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "bento",
-      // `npm run db:create` の出力を貼る
-      "database_id": "7fa7c0fe-282e-4d85-afaf-1fba0b292e00",
+      "database_name": "bento-enam",
+      // `npm run db:create` の出力を貼る。primary は enam（米国東部）に置く。
+      // Worker は Discord のリクエスト元＝米国で動くので、日本に置くと
+      // D1 の1往復ごとに 200ms 近く乗り、Discord の3秒に間に合わなくなる
+      "database_id": "2f4c8510-ac5e-4321-a9a4-8c25e97fdad9",
       "migrations_dir": "migrations"
     }
   ]

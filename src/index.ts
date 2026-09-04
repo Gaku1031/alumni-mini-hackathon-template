@@ -304,25 +304,37 @@ function components(ev: BentoEvent, orders: BentoOrder[]) {
   return rows;
 }
 
-/** DB を引いて集計メッセージを組み立てる。ボタンを押すたびに毎回これを通る */
-async function board(env: Env, eventId: string) {
-  const ev = await env.DB.prepare("select * from bento_events where id = ?")
-    .bind(eventId)
-    .first<BentoEvent>();
-  if (!ev) return null;
+/**
+ * DB を引いて集計メッセージを組み立てる。ボタンを押すたびに毎回これを通る。
+ *
+ * 書き込みは writes に渡す。読み直しと同じ batch に入れて1往復で済ませるため。
+ * Worker は Discord のリクエスト元（米国）で動くのに D1 の primary は
+ * データベースを作った場所（日本）にあるので、1往復ごとに 200ms 近く乗る。
+ * Discord は3秒で切るので、素直に「書く→読む→読む」と3往復すると余裕が無い。
+ */
+async function board(env: Env, eventId: string, ...writes: D1PreparedStatement[]) {
+  const rows = await env.DB.batch([
+    ...writes,
+    env.DB.prepare("select * from bento_events where id = ?").bind(eventId),
+    env.DB.prepare("select * from bento_orders where event_id = ? order by created_at").bind(
+      eventId,
+    ),
+  ]);
 
-  const { results } = await env.DB.prepare(
-    "select * from bento_orders where event_id = ? order by created_at",
-  )
-    .bind(eventId)
-    .all<BentoOrder>();
+  const ev = rows[rows.length - 2].results[0] as BentoEvent | undefined;
+  if (!ev) return null;
+  const orders = rows[rows.length - 1].results as unknown as BentoOrder[];
 
   return {
-    content: render(ev, results),
-    components: components(ev, results),
-    // 品名・表示名・支払先はそのまま本文に載る。@everyone と書かれても
-    // メンションとして解釈させない。表示は文字列のまま変わらない
-    allowed_mentions: { parse: [] },
+    // 何行変わったかは、押した人に返す文言を決めるのに使う（0件なら空振り）
+    writes: rows.slice(0, writes.length),
+    data: {
+      content: render(ev, orders),
+      components: components(ev, orders),
+      // 品名・表示名・支払先はそのまま本文に載る。@everyone と書かれても
+      // メンションとして解釈させない。表示は文字列のまま変わらない
+      allowed_mentions: { parse: [] },
+    },
   };
 }
 
@@ -339,10 +351,10 @@ function gone() {
  * 直すなら集計メッセージに版番号を持たせて条件付き更新にするが、
  * ずれるのが表示だけで自然に治る以上、割に合わない。
  */
-async function updated(env: Env, eventId: string) {
-  const payload = await board(env, eventId);
-  if (!payload) return gone();
-  return json({ type: UPDATE_MESSAGE, data: payload });
+async function updated(env: Env, eventId: string, ...writes: D1PreparedStatement[]) {
+  const b = await board(env, eventId, ...writes);
+  if (!b) return gone();
+  return json({ type: UPDATE_MESSAGE, data: b.data });
 }
 
 /** `/bento` — イベントを作り、集計メッセージをチャンネルに投稿する */
@@ -381,7 +393,7 @@ function createEvent(interaction: any, env: Env, ctx: ExecutionContext) {
       const msg = (await discord(
         `/channels/${interaction.channel_id}/messages`,
         env.DISCORD_BOT_TOKEN,
-        { method: "POST", body: JSON.stringify(await board(env, eventId)) },
+        { method: "POST", body: JSON.stringify((await board(env, eventId))?.data) },
       )) as { id: string };
 
       await env.DB.prepare("update bento_events set message_id = ? where id = ?")
@@ -551,11 +563,12 @@ function modalValue(interaction: any, id: string): string {
 }
 
 /**
- * 注文を1件入れる。unique(event_id, discord_user_id) があるので2回目は上書きになる。
+ * 注文を1件入れる文。unique(event_id, discord_user_id) があるので2回目は上書きになる。
  * userId は「頼む本人」であって、押した人とは限らない（代理入力）。
  * 本人があとから自分で入れ直せば ordered_by も消えて、代理の跡が残らない。
+ * 実行せずに文だけ返すのは、盤面の読み直しと同じ batch に入れるため。
  */
-async function upsertOrder(
+function orderStmt(
   env: Env,
   eventId: string,
   targetUserId: string,
@@ -564,7 +577,7 @@ async function upsertOrder(
   price: number,
   orderedBy: string | null,
 ) {
-  await env.DB.prepare(
+  return env.DB.prepare(
     `insert into bento_orders (id, event_id, discord_user_id, display_name, item_name, price, ordered_by)
      values (?, ?, ?, ?, ?, ?, ?)
      on conflict(event_id, discord_user_id) do update set
@@ -572,9 +585,7 @@ async function upsertOrder(
        item_name = excluded.item_name,
        price = excluded.price,
        ordered_by = excluded.ordered_by`,
-  )
-    .bind(crypto.randomUUID(), eventId, targetUserId, targetName, name, price, orderedBy)
-    .run();
+  ).bind(crypto.randomUUID(), eventId, targetUserId, targetName, name, price, orderedBy);
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Discord の interaction は形が type ごとに変わる
@@ -627,50 +638,65 @@ async function handleComponent(interaction: any, env: Env) {
       return menuModal(eventId, ev.menu_url);
 
     case "reopen":
-      await env.DB.prepare("update bento_events set status = 'open' where id = ?")
-        .bind(eventId)
-        .run();
-      return updated(env, eventId);
+      return updated(
+        env,
+        eventId,
+        env.DB.prepare("update bento_events set status = 'open' where id = ?").bind(eventId),
+      );
 
     case "pick": {
       // value は "650:唐揚げ弁当"。品名にコロンが入っても壊れないよう最初の1個で切る
       const raw: string = interaction.data.values[0];
       const sep = raw.indexOf(":");
       const price = Number.parseInt(raw.slice(0, sep), 10);
-      await upsertOrder(
+      return updated(
         env,
         eventId,
-        userId(interaction),
-        displayName(interaction),
-        raw.slice(sep + 1),
-        price,
-        null,
+        orderStmt(
+          env,
+          eventId,
+          userId(interaction),
+          displayName(interaction),
+          raw.slice(sep + 1),
+          price,
+          null,
+        ),
       );
-      return updated(env, eventId);
     }
 
     case "cancel":
-      await env.DB.prepare("delete from bento_orders where id = ? and event_id = ?")
-        .bind(interaction.data.values[0], eventId)
-        .run();
-      return updated(env, eventId);
+      return updated(
+        env,
+        eventId,
+        env.DB.prepare("delete from bento_orders where id = ? and event_id = ?").bind(
+          interaction.data.values[0],
+          eventId,
+        ),
+      );
 
     case "pay": {
-      const r = await env.DB.prepare(
-        "update bento_orders set paid = 1 where event_id = ? and discord_user_id = ?",
-      )
-        .bind(eventId, userId(interaction))
-        .run();
+      const b = await board(
+        env,
+        eventId,
+        env.DB.prepare(
+          "update bento_orders set paid = 1 where event_id = ? and discord_user_id = ?",
+        ).bind(eventId, userId(interaction)),
+      );
+      if (!b) return gone();
       // 頼んでいない人が押すと0件。何も変わらないと壊れて見えるので本人に返す
-      if (r.meta.changes === 0) return reply("あなたの注文が見つかりません。");
-      return updated(env, eventId);
+      if (b.writes[0].meta.changes === 0) return reply("あなたの注文が見つかりません。");
+      return json({ type: UPDATE_MESSAGE, data: b.data });
     }
 
     case "unpay":
-      await env.DB.prepare("update bento_orders set paid = 0 where id = ? and event_id = ?")
-        .bind(interaction.data.values[0], eventId)
-        .run();
-      return updated(env, eventId);
+      return updated(
+        env,
+        eventId,
+        env.DB.prepare("update bento_orders set paid = 0 where id = ? and event_id = ?").bind(
+          interaction.data.values[0],
+          eventId,
+        ),
+      );
 
     default:
       return reply("不明な操作です。");
@@ -697,26 +723,33 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
     // 代理扱いにしない
     const self = userId(interaction);
     const proxied = targetId !== undefined && targetId !== self;
-    await upsertOrder(
+    return updated(
       env,
       eventId,
-      proxied ? targetId : self,
-      proxied ? modalValue(interaction, "for_name") || "unknown" : displayName(interaction),
-      name,
-      price,
-      proxied ? displayName(interaction) : null,
+      orderStmt(
+        env,
+        eventId,
+        proxied ? targetId : self,
+        proxied ? modalValue(interaction, "for_name") || "unknown" : displayName(interaction),
+        name,
+        price,
+        proxied ? displayName(interaction) : null,
+      ),
     );
-    return updated(env, eventId);
   }
 
   if (action === "domenu") {
     const url = modalValue(interaction, "menu_url").trim();
     // 空なら消す。https:// を付け忘れると Discord がリンクにしないので補う
     const normalized = url === "" ? null : /^https?:\/\//i.test(url) ? url : `https://${url}`;
-    await env.DB.prepare("update bento_events set menu_url = ? where id = ? and status = 'open'")
-      .bind(normalized, eventId)
-      .run();
-    return updated(env, eventId);
+    return updated(
+      env,
+      eventId,
+      env.DB.prepare("update bento_events set menu_url = ? where id = ? and status = 'open'").bind(
+        normalized,
+        eventId,
+      ),
+    );
   }
 
   if (action === "doclose") {
@@ -733,14 +766,17 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
 
     // status を条件に入れて、二重に締め切っても2回目は何も起きないようにする。
     // 締め切り通知の @here を2回飛ばさないための条件でもある
-    const r = await env.DB.prepare(
-      "update bento_events set status = 'closed', shared_costs = ?, payment_info = ? where id = ? and status = 'open'",
-    )
-      .bind(JSON.stringify(shared), payment || null, eventId)
-      .run();
-    if (r.meta.changes === 0) return reply("この募集はもう締め切られています。");
+    const b = await board(
+      env,
+      eventId,
+      env.DB.prepare(
+        "update bento_events set status = 'closed', shared_costs = ?, payment_info = ? where id = ? and status = 'open'",
+      ).bind(JSON.stringify(shared), payment || null, eventId),
+    );
+    if (!b) return gone();
+    if (b.writes[0].meta.changes === 0) return reply("この募集はもう締め切られています。");
 
-    const res = await updated(env, eventId);
+    const res = json({ type: UPDATE_MESSAGE, data: b.data });
     // 締め切りだけは1回だけ通知する。以降の未払いの催促は表示のみで通知しない
     ctx.waitUntil(
       discord(`/channels/${interaction.channel_id}/messages`, env.DISCORD_BOT_TOKEN, {

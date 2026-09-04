@@ -52,9 +52,13 @@ async function send(interaction) {
 }
 
 function sql(command) {
-  execFileSync("npx", ["wrangler", "d1", "execute", "bento", "--local", "--command", command], {
-    stdio: "ignore",
-  });
+  execFileSync(
+    "npx",
+    ["wrangler", "d1", "execute", "bento-enam", "--local", "--command", command],
+    {
+      stdio: "ignore",
+    },
+  );
 }
 
 // ── Discord が送ってくる interaction の組み立て ────────────────────────
@@ -165,7 +169,7 @@ before(async () => {
   writeFileSync(".dev.vars", `DISCORD_PUBLIC_KEY=${publicKeyHex}\nDISCORD_BOT_TOKEN=dummy\n`);
 
   // ローカルの D1 にテーブルが無いとハンドラが落ちる。冪等なので毎回打つ
-  execFileSync("npx", ["wrangler", "d1", "migrations", "apply", "bento", "--local"], {
+  execFileSync("npx", ["wrangler", "d1", "migrations", "apply", "bento-enam", "--local"], {
     stdio: "ignore",
   });
 

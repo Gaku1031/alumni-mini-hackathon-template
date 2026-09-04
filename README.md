@@ -35,6 +35,9 @@ Discord のチャンネルに貼った**1枚のメッセージ**が、注文が�
 npm install
 npx wrangler login
 npm run db:create              # 出力された database_id を wrangler.jsonc に貼る
+                               # --location enam で作る。Worker は Discord の
+                               # リクエスト元（米国）で動くので、DB を日本に置くと
+                               # 1往復ごとに 200ms 近く乗り、3秒の制限に近づく
 npm run db:apply               # ローカルの D1 にテーブルを作る
 ```
 
