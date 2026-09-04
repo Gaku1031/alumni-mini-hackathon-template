@@ -33,6 +33,8 @@ type BentoEvent = {
   payment_info: string | null;
   /** 締め切りを知らせた @here のメッセージ。再開したときに書き換える先 */
   notice_message_id: string | null;
+  /** 締め切った人＝立て替えた人の表示名。頼むだけで食べない幹事もいるので注文からは引けない */
+  closed_by: string | null;
 };
 
 type BentoOrder = {
@@ -187,7 +189,8 @@ function render(ev: BentoEvent, orders: BentoOrder[]) {
   if (closed) {
     const unpaid = orders.filter((o) => o.paid === 0);
     lines.push("");
-    lines.push(`**集金** ${orders.length - unpaid.length}/${orders.length}`);
+    const payer = ev.closed_by ? `（立て替え: ${ev.closed_by}）` : "";
+    lines.push(`**集金** ${orders.length - unpaid.length}/${orders.length}${payer}`);
     if (unpaid.length > 0) lines.push(`未払い: ${unpaid.map((o) => o.display_name).join(", ")}`);
     // 送金先は口座番号のように複数行のこともあるので、1行に押し込めず改行のまま出す
     if (ev.payment_info) lines.push("", "**支払先**", ev.payment_info);
@@ -907,12 +910,20 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
     const b = await board(
       env,
       eventId,
+      // 締め切った人は立て替える側なので、自分の注文があれば集金済みにしておく。
+      // 頼んでいなければ0行で何も起きない。締め切りの update より前に置くのは、
+      // あとに置くと status がもう closed になっていて exists が外れるから
       env.DB.prepare(
-        "update bento_events set status = 'closed', shared_costs = ?, payment_info = ? where id = ? and status = 'open'",
-      ).bind(JSON.stringify(shared), payment || null, eventId),
+        `update bento_orders set paid = 1
+         where event_id = ? and discord_user_id = ?
+           and exists (select 1 from bento_events where id = ? and status = 'open')`,
+      ).bind(eventId, userId(interaction), eventId),
+      env.DB.prepare(
+        "update bento_events set status = 'closed', shared_costs = ?, payment_info = ?, closed_by = ? where id = ? and status = 'open'",
+      ).bind(JSON.stringify(shared), payment || null, displayName(interaction), eventId),
     );
     if (!b) return gone();
-    if (b.writes[0].meta.changes === 0) return reply("この募集はもう締め切られています。");
+    if (b.writes[1].meta.changes === 0) return reply("この募集はもう締め切られています。");
 
     const res = json({ type: UPDATE_MESSAGE, data: b.data });
     // 締め切りだけは1回だけ通知する。以降の未払いの催促は表示のみで通知しない

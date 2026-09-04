@@ -176,7 +176,7 @@ before(async () => {
   // イベントは wrangler 越しの SQL が遅いので、必要な数をまとめて1回で作る。
   // `/bento` 本体は Discord へメッセージを投稿するので、そこはここでは通さない
   const stmts = ["delete from bento_orders", "delete from bento_events"];
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 80; i++) {
     stmts.push(
       `insert into bento_events (id, guild_id, channel_id, title, created_at)
        values ('ev-${i}', '${G}', 'chan-1', '9/15(月) お弁当', '2026-02-0${(i % 9) + 1}')`,
@@ -665,9 +665,49 @@ describe("締め切る", () => {
 
   test("締め切ると集金のボタンに切り替わる", async () => {
     const ev = nextEvent();
-    await order(ev, "唐揚げ弁当", 650);
+    // 締め切る u1 自身が頼むと自動で払い済みになり「取り消す」まで出る。
+    // ここで見たいのは切り替わりだけなので、頼むのは別の人にする
+    await order(ev, "唐揚げ弁当", 650, { user: "u2", name: "じろう" });
     const res = await submit(ev, "doclose", { shared: "", payment: "" });
     assert.deepEqual(ids(res.data.components), ["pay", "reopen"]);
+  });
+
+  test("締め切った人の分は最初から払い済みになる", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 650, { user: "u1", name: "たろう" });
+    await order(ev, "のり弁", 400, { user: "u2", name: "じろう" });
+    const res = await submit(ev, "doclose", { shared: "", payment: "" });
+    assert.match(res.data.content, /\*\*集金\*\* 1\/2/);
+    assert.match(res.data.content, /未払い: じろう/);
+    assert.doesNotMatch(res.data.content, /未払い:.*たろう/);
+  });
+
+  test("弁当を頼んでいない人が締め切っても誰も払い済みにならない", async () => {
+    const ev = nextEvent();
+    await order(ev, "のり弁", 400, { user: "u2", name: "じろう" });
+    // 配送料の頭数は注文者だけ。頼まない幹事は分母に入らない
+    const res = await submit(ev, "doclose", { shared: "配送料 500", payment: "" }, { user: "u1" });
+    assert.match(res.data.content, /\*\*集金\*\* 0\/1/);
+    assert.match(res.data.content, /配送料は1人で均等割 → ¥500/);
+  });
+
+  test("立て替えた人が集金の行に出る", async () => {
+    const ev = nextEvent();
+    await order(ev, "のり弁", 400, { user: "u2", name: "じろう" });
+    const res = await submit(ev, "doclose", { shared: "", payment: "" }, { name: "たろう" });
+    assert.match(res.data.content, /\*\*集金\*\* 0\/1（立て替え: たろう）/);
+  });
+
+  test("空振りした締め切りでは押した人が払い済みにならない", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 650, { user: "u1", name: "たろう" });
+    await order(ev, "のり弁", 400, { user: "u2", name: "じろう" });
+    await submit(ev, "doclose", { shared: "", payment: "" }, { user: "u2", name: "じろう" });
+    // すでに締め切られたあとに u1 が古い盤面から締め切りを送っても、勝手に払い済みにしない
+    await submit(ev, "doclose", { shared: "", payment: "" }, { user: "u1", name: "たろう" });
+    const content = (await board(ev, true)).content;
+    assert.match(content, /\*\*集金\*\* 1\/2/);
+    assert.match(content, /未払い: たろう/);
   });
 
   test("締め切り済みに注文は入れられない", async () => {
