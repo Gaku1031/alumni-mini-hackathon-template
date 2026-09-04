@@ -163,7 +163,9 @@ function render(ev: BentoEvent, orders: BentoOrder[]) {
         ? `${yen(o.price)} + ${yen(perHead)} = **${yen(o.price + perHead)}**`
         : yen(o.price);
     const names = list
-      .map((x) => (x.ordered_by ? `${x.display_name}（${x.ordered_by}が代理入力）` : x.display_name))
+      .map((x) =>
+        x.ordered_by ? `${x.display_name}（${x.ordered_by}が代理入力）` : x.display_name,
+      )
       .join(", ");
     lines.push(`- ${o.item_name}  ${amount}  ×${list.length}  ${names}`);
   }
