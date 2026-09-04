@@ -24,7 +24,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # node_modules を丸ごとキャッシュして npm ci を飛ばす。
+      # ~/.npm（setup-node の cache: npm）が持つのは tarball 置き場で、
+      # そこから 300MB 超を展開し直すのに毎回7分かかっていた。
+      # 依存が変わればキーが変わるので、そのときだけ npm ci に戻る
+      - uses: actions/cache@v4
+        id: deps
+        with:
+          path: node_modules
+          key: node_modules-${{ runner.os }}-node22-${{ hashFiles('package-lock.json') }}
       - run: npm ci
+        if: steps.deps.outputs.cache-hit != 'true'
       - run: npm run check
       - run: npm test
 
