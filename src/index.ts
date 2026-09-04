@@ -593,17 +593,6 @@ async function handleComponent(interaction: any, env: Env) {
         .run();
       // 頼んでいない人が押すと0件。何も変わらないと壊れて見えるので本人に返す
       if (r.meta.changes === 0) return reply("あなたの注文が見つかりません。");
-
-      // 全員払い終わったら送金先を消す。電話番号や口座を、用が済んだあとも
-      // 持ち続ける理由が無い。読んでから消すのではなく1文で判定して消すので、
-      // 最後の1人が同時に押しても二重に消えるだけで壊れない
-      await env.DB.prepare(
-        `update bento_events set payment_info = null
-          where id = ? and not exists
-                (select 1 from bento_orders where event_id = ? and paid = 0)`,
-      )
-        .bind(eventId, eventId)
-        .run();
       return updated(env, eventId);
     }
 

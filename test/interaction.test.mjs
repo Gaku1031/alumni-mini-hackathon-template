@@ -660,33 +660,20 @@ describe("集金する", () => {
 // としか出ない。手で試して気づける類のものではないので機械で見張る。
 
 describe("残さないもの", () => {
-  test("全員が支払い終わると支払先が消える", async () => {
+  test("全員が支払い終わっても支払先は残る", async () => {
     const ev = nextEvent();
     await order(ev, "唐揚げ弁当", 800, { user: "p1", name: "いち" });
     await order(ev, "のり弁", 500, { user: "p2", name: "に" });
     await submit(ev, "doclose", { shared: "", payment: "PayPay 090-1111-2222" });
 
     await button(ev, "pay", { user: "p1" });
-    // まだ1人残っているので消えない
-    assert.match((await board(ev, true)).content, /090-1111-2222/);
+    const done = await button(ev, "pay", { user: "p2" });
+    assert.match(done.data.content, /090-1111-2222/);
 
-    await button(ev, "pay", { user: "p2" });
-    assert.doesNotMatch((await board(ev, true)).content, /090-1111-2222/);
-    assert.doesNotMatch((await board(ev, true)).content, /支払先/);
-  });
-
-  test("最後の1人が一斉に押しても壊れない", async () => {
-    const ev = nextEvent();
-    await Promise.all(
-      Array.from({ length: 5 }, (_, i) =>
-        order(ev, "唐揚げ弁当", 800, { user: `q${i}`, name: `q${i}` }),
-      ),
-    );
-    await submit(ev, "doclose", { shared: "", payment: "PayPay 090-3333-4444" });
-    await Promise.all(Array.from({ length: 5 }, (_, i) => button(ev, "pay", { user: `q${i}` })));
-    const { content } = await board(ev, true);
-    assert.doesNotMatch(content, /090-3333-4444/);
-    assert.match(content, /5\/5/);
+    // 押し間違いを戻したとき、送金先が読めないと払えない。
+    // 全員払ったら消す、という作りにするとここが壊れる
+    const back = await select(ev, "unpay", comp(done.data.components, "unpay").options[0].value);
+    assert.match(back.data.content, /090-1111-2222/);
   });
 
   test("本文に @everyone と書かれてもメンションにしない", async () => {
