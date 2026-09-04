@@ -263,12 +263,12 @@ describe("注文を入れる", () => {
     const ev = nextEvent();
     const res = await order(ev, "唐揚げ弁当", 650);
     assert.equal(res.type, 7);
-    assert.match(res.data.content, /🍱 唐揚げ弁当\s+¥650\s+×1\s+たろう/);
+    assert.match(res.data.content, /- 唐揚げ弁当\s+¥650\s+×1\s+たろう/);
   });
 
   test("メニューのURLを入れておくと集計メッセージから開ける", async () => {
     const { content } = await board("with-menu");
-    assert.match(content, /📎 メニュー: https:\/\/example\.com\/menu/);
+    assert.match(content, /メニュー: https:\/\/example\.com\/menu/);
   });
 
   test("注文が0件のときはその旨を出す", async () => {
@@ -295,7 +295,7 @@ describe("注文を入れる", () => {
   test("全角数字やカンマ・円つきでも金額として読む", async () => {
     const ev = nextEvent();
     const res = await order(ev, "うな重", "１,２００円");
-    assert.match(res.data.content, /🍱 うな重\s+¥1,200/);
+    assert.match(res.data.content, /- うな重\s+¥1,200/);
   });
 
   test("同じ人が入れ直すと上書きされる（1人1個）", async () => {
@@ -311,7 +311,7 @@ describe("注文を入れる", () => {
     const ev = nextEvent();
     await order(ev, "唐揚げ弁当", 650, { user: "u1", name: "たろう" });
     const res = await order(ev, "唐揚げ弁当", 650, { user: "u2", name: "はなこ" });
-    assert.match(res.data.content, /🍱 唐揚げ弁当\s+¥650\s+×2\s+たろう, はなこ/);
+    assert.match(res.data.content, /- 唐揚げ弁当\s+¥650\s+×2\s+たろう, はなこ/);
     assert.match(res.data.content, /弁当代 ¥1,300/);
   });
 
@@ -480,10 +480,7 @@ describe("締め切る", () => {
       shared: "",
       payment: "〇〇銀行 △△支店\n普通 1234567\nヤマダタロウ",
     });
-    assert.match(
-      res.data.content,
-      /💳 \*\*支払先\*\*\n〇〇銀行 △△支店\n普通 1234567\nヤマダタロウ/,
-    );
+    assert.match(res.data.content, /\*\*支払先\*\*\n〇〇銀行 △△支店\n普通 1234567\nヤマダタロウ/);
   });
 
   test("支払先を空で締め切れば支払先の行は出ない", async () => {
@@ -526,7 +523,7 @@ describe("締め切る", () => {
     const ev = nextEvent();
     const res = await submit(ev, "doclose", { shared: "配送料 500", payment: "" });
     assert.equal(res.type, 7);
-    assert.match(res.data.content, /💰 集金 0\/0/);
+    assert.match(res.data.content, /\*\*集金\*\* 0\/0/);
   });
 
   test("締め切ると集金のボタンに切り替わる", async () => {
@@ -590,7 +587,7 @@ describe("集金する", () => {
     await submit(ev, "doclose", { shared: "", payment: "" });
 
     const res = await button(ev, "pay", { user: "u1", name: "たろう" });
-    assert.match(res.data.content, /💰 集金 1\/2/);
+    assert.match(res.data.content, /\*\*集金\*\* 1\/2/);
     assert.match(res.data.content, /未払い: はなこ/);
   });
 
@@ -601,7 +598,7 @@ describe("集金する", () => {
     await submit(ev, "doclose", { shared: "", payment: "" });
     await button(ev, "pay", { user: "u1" });
     const res = await button(ev, "pay", { user: "u2", name: "はなこ" });
-    assert.match(res.data.content, /💰 集金 2\/2/);
+    assert.match(res.data.content, /\*\*集金\*\* 2\/2/);
     assert.doesNotMatch(res.data.content, /未払い:/);
   });
 
@@ -620,7 +617,7 @@ describe("集金する", () => {
     await submit(ev, "doclose", { shared: "", payment: "" });
     await button(ev, "pay", { user: "u1" });
     const res = await button(ev, "pay", { user: "u1" });
-    assert.match(res.data.content, /💰 集金 1\/1/);
+    assert.match(res.data.content, /\*\*集金\*\* 1\/1/);
   });
 
   test("間違えて押した人を未払いに戻せる", async () => {
@@ -634,7 +631,7 @@ describe("集金する", () => {
     assert.equal(unpay.options[0].label, "たろう / 唐揚げ弁当");
 
     const res = await select(ev, "unpay", unpay.options[0].value);
-    assert.match(res.data.content, /💰 集金 0\/1/);
+    assert.match(res.data.content, /\*\*集金\*\* 0\/1/);
   });
 
   test("再開すると注文のボタンに戻り、注文も残っている", async () => {
@@ -771,7 +768,7 @@ describe("同時に押されたとき", () => {
       ),
     );
     const { content } = await board(ev);
-    assert.match(content, /🍱 唐揚げ弁当\s+¥650\s+×5/);
+    assert.match(content, /- 唐揚げ弁当\s+¥650\s+×5/);
     assert.equal(counted(content), 5);
     assert.match(content, /弁当代 ¥3,250/);
   });
@@ -799,7 +796,7 @@ describe("同時に押されたとき", () => {
     const { content } = await board(ev, true);
     const people = counted(content);
     // 締め切り後の集金の分母は、生きている注文の件数と必ず一致する
-    assert.match(content, new RegExp(`💰 集金 0/${people}`));
+    assert.match(content, new RegExp(`\\*\\*集金\\*\\* 0/${people}`));
     // 均等割の額も同じ人数から計算されている
     assert.match(content, new RegExp(`${people}人で均等割 → ¥${Math.ceil(500 / people)}`));
   });
@@ -813,7 +810,7 @@ describe("同時に押されたとき", () => {
     );
     await submit(ev, "doclose", { shared: "", payment: "" });
     await Promise.all(Array.from({ length: 5 }, (_, i) => button(ev, "pay", { user: `s${i}` })));
-    assert.match((await board(ev, true)).content, /💰 集金 5\/5/);
+    assert.match((await board(ev, true)).content, /\*\*集金\*\* 5\/5/);
   });
 
   test("二人が同時に締め切っても締め切りは1回だけ通る", async () => {

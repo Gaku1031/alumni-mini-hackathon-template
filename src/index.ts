@@ -140,8 +140,8 @@ function render(ev: BentoEvent, orders: BentoOrder[]) {
   const perHead = orders.length > 0 ? Math.ceil(sharedTotal / orders.length) : 0;
   const closed = ev.status === "closed";
 
-  const lines = [`📌 **${ev.title}**`];
-  if (ev.menu_url) lines.push(`📎 メニュー: ${ev.menu_url}`);
+  const lines = [`## ${ev.title}`];
+  if (ev.menu_url) lines.push(`メニュー: ${ev.menu_url}`);
   lines.push("");
 
   const groups = new Map<string, BentoOrder[]>();
@@ -161,7 +161,7 @@ function render(ev: BentoEvent, orders: BentoOrder[]) {
         ? `${yen(o.price)} + ${yen(perHead)} = **${yen(o.price + perHead)}**`
         : yen(o.price);
     const names = list.map((x) => x.display_name).join(", ");
-    lines.push(`🍱 ${o.item_name}  ${amount}  ×${list.length}  ${names}`);
+    lines.push(`- ${o.item_name}  ${amount}  ×${list.length}  ${names}`);
   }
 
   lines.push("──────────────────────────────");
@@ -179,10 +179,10 @@ function render(ev: BentoEvent, orders: BentoOrder[]) {
   if (closed) {
     const unpaid = orders.filter((o) => o.paid === 0);
     lines.push("");
-    lines.push(`💰 集金 ${orders.length - unpaid.length}/${orders.length}`);
+    lines.push(`**集金** ${orders.length - unpaid.length}/${orders.length}`);
     if (unpaid.length > 0) lines.push(`未払い: ${unpaid.map((o) => o.display_name).join(", ")}`);
     // 送金先は口座番号のように複数行のこともあるので、1行に押し込めず改行のまま出す
-    if (ev.payment_info) lines.push("", `💳 **支払先**`, ev.payment_info);
+    if (ev.payment_info) lines.push("", "**支払先**", ev.payment_info);
   }
 
   // Discord のメッセージは2000文字まで。超えると差し替えが 400 で弾かれ、
