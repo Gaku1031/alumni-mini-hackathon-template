@@ -201,6 +201,19 @@ function render(ev: BentoEvent, orders: BentoOrder[]) {
 }
 
 /**
+ * 既出の品がそのままメニューになる。メニュー用のテーブルは持たない。
+ * 自分の分（頼む）と代理入力の両方から同じ一覧を出すのでここにまとめる
+ */
+function menuOptions(orders: BentoOrder[]) {
+  const menu = new Map<string, BentoOrder>();
+  for (const o of orders) menu.set(`${o.item_name} ${o.price}`, o);
+  return [...menu.values()].slice(0, 25).map((o) => ({
+    label: `${o.item_name} ${yen(o.price)}`.slice(0, 100),
+    value: `${o.price}:${o.item_name}`.slice(0, 100),
+  }));
+}
+
+/**
  * ponytail: セレクトの選択肢は Discord の上限で25件まで。26人目からは
  * 一覧に出ないので「取り消す」から選べない（注文は「新しく入力」でできる）。
  * 26人以上で回すことになったら、ページ送りか名前での絞り込みを足す。
@@ -209,24 +222,12 @@ function components(ev: BentoEvent, orders: BentoOrder[]) {
   const rows: unknown[] = [];
 
   if (ev.status === "open") {
-    // 既出の品がそのままメニューになる。メニュー用のテーブルは持たない
-    const menu = new Map<string, BentoOrder>();
-    for (const o of orders) menu.set(`${o.item_name} ${o.price}`, o);
+    const menu = menuOptions(orders);
 
-    if (menu.size > 0) {
+    if (menu.length > 0) {
       rows.push({
         type: 1,
-        components: [
-          {
-            type: 3,
-            custom_id: `pick:${ev.id}`,
-            placeholder: "頼む",
-            options: [...menu.values()].slice(0, 25).map((o) => ({
-              label: `${o.item_name} ${yen(o.price)}`.slice(0, 100),
-              value: `${o.price}:${o.item_name}`.slice(0, 100),
-            })),
-          },
-        ],
+        components: [{ type: 3, custom_id: `pick:${ev.id}`, placeholder: "頼む", options: menu }],
       });
     }
 
@@ -328,6 +329,8 @@ async function board(env: Env, eventId: string, ...writes: D1PreparedStatement[]
   const orders = rows[rows.length - 1].results as unknown as BentoOrder[];
 
   return {
+    ev,
+    orders,
     // 何行変わったかは、押した人に返す文言を決めるのに使う（0件なら空振り）
     writes: rows.slice(0, writes.length),
     data: {
@@ -452,11 +455,17 @@ function menuModal(eventId: string, current: string | null) {
  * 付いてこないので、表示名は初期値付きの入力欄に入れて一緒に戻ってくるようにする
  * （Discord に問い合わせ直さずに済むし、押した人は誰の分か見て確かめられる）。
  */
-function itemModal(eventId: string, target?: { id: string; name: string }) {
+function itemModal(
+  eventId: string,
+  target?: { id: string; name: string },
+  // ephemeral から開いたモーダルは、送信の返事も ephemeral に向く。
+  // 集計メッセージの差し替え方が変わるので、送信先を custom_id で分ける
+  action: "newitem" | "pitem" = "newitem",
+) {
   return json({
     type: MODAL,
     data: {
-      custom_id: target ? `newitem:${eventId}:${target.id}` : `newitem:${eventId}`,
+      custom_id: target ? `${action}:${eventId}:${target.id}` : `${action}:${eventId}`,
       title: target ? "代わりに入力" : "注文を入力",
       components: [
         ...(target
@@ -590,9 +599,43 @@ function orderStmt(
   ).bind(crypto.randomUUID(), eventId, targetUserId, targetName, name, price, orderedBy);
 }
 
+/**
+ * 代理入力の ephemeral から注文を入れたときの後始末。
+ * interaction の返事は ephemeral 自身に向くので、集計メッセージのほうは
+ * bot として直接書き換えるしかない。押した本人には ephemeral で結果を返す
+ */
+async function fromEphemeral(
+  env: Env,
+  ctx: ExecutionContext,
+  eventId: string,
+  name: string,
+  ...writes: D1PreparedStatement[]
+) {
+  const b = await board(env, eventId, ...writes);
+  if (!b) return gone();
+  if (b.ev.message_id) {
+    ctx.waitUntil(
+      discord(`/channels/${b.ev.channel_id}/messages/${b.ev.message_id}`, env.DISCORD_BOT_TOKEN, {
+        method: "PATCH",
+        body: JSON.stringify(b.data),
+      }).catch(() => {}),
+    );
+  }
+  // 選び終わったボタンを残すと二度押しできてしまうので、components ごと消す
+  return json({
+    type: UPDATE_MESSAGE,
+    data: { content: `${name} の分を入れました。`, components: [] },
+  });
+}
+
 // biome-ignore lint/suspicious/noExplicitAny: Discord の interaction は形が type ごとに変わる
 async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext) {
-  const [action, eventId] = interaction.data.custom_id.split(":");
+  // 代理入力の ephemeral だけは、誰の分かを custom_id に載せて運ぶ。
+  // 表示名にコロンが入っていても壊れないよう、名前は残り全部として読む
+  const parts: string[] = interaction.data.custom_id.split(":");
+  const [action, eventId] = parts;
+  const targetId = parts[2];
+  const targetName = parts.slice(3).join(":");
 
   // 状態と、締め切りモーダルの初期値を1回で引く。
   // last_payment は「このイベントの支払先、無ければ同じサーバーで最後に使った支払先」
@@ -617,7 +660,9 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
     action === "proxy" ||
     action === "pick" ||
     action === "cancel" ||
-    action === "menu";
+    action === "menu" ||
+    action === "ppick" ||
+    action === "pnew";
   if ((whileOpen || action === "close") && ev.status === "closed") {
     return reply("この募集はもう締め切られています。");
   }
@@ -633,9 +678,76 @@ async function handleComponent(interaction: any, env: Env, ctx: ExecutionContext
       // ユーザーセレクトの選択結果。表示名は resolved に付いてくる
       const id: string = interaction.data.values[0];
       const r = interaction.data.resolved;
-      const name =
-        r?.members?.[id]?.nick || r?.users?.[id]?.global_name || r?.users?.[id]?.username || "?";
-      return itemModal(eventId, { id, name });
+      const name = (
+        r?.members?.[id]?.nick ||
+        r?.users?.[id]?.global_name ||
+        r?.users?.[id]?.username ||
+        "?"
+      ).slice(0, 32); // custom_id は100文字まで。uuid と user_id で67文字使う
+
+      const b = await board(env, eventId);
+      if (!b) return gone();
+      const menu = menuOptions(b.orders);
+      // まだ1件も入っていないなら選ぶものが無い。そのまま入力してもらう
+      if (menu.length === 0) return itemModal(eventId, { id, name });
+
+      // 自分の分と同じで、既出の品はメニューから選べたほうが速い。
+      // モーダルにセレクトは入れられないので、いったん本人にだけ見える形で出す
+      return json({
+        type: CHANNEL_MESSAGE,
+        data: {
+          content: `${name} の分を入れます。`,
+          flags: EPHEMERAL,
+          components: [
+            {
+              type: 1,
+              components: [
+                {
+                  type: 3,
+                  custom_id: `ppick:${eventId}:${id}:${name}`,
+                  placeholder: "メニューから選ぶ",
+                  options: menu,
+                },
+              ],
+            },
+            {
+              type: 1,
+              components: [
+                {
+                  type: 2,
+                  style: 2,
+                  label: "メニューに無いものを入力",
+                  custom_id: `pnew:${eventId}:${id}:${name}`,
+                },
+              ],
+            },
+          ],
+        },
+      });
+    }
+
+    case "pnew":
+      return itemModal(eventId, { id: targetId, name: targetName }, "pitem");
+
+    case "ppick": {
+      const raw: string = interaction.data.values[0];
+      const sep = raw.indexOf(":");
+      return fromEphemeral(
+        env,
+        ctx,
+        eventId,
+        targetName,
+        orderStmt(
+          env,
+          eventId,
+          targetId,
+          targetName,
+          raw.slice(sep + 1),
+          Number.parseInt(raw.slice(0, sep), 10),
+          // 自分を選んだときは代理扱いにしない
+          targetId === userId(interaction) ? null : displayName(interaction),
+        ),
+      );
     }
 
     case "close":
@@ -737,7 +849,9 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
   if (!ev) return gone();
   if (ev.status === "closed") return reply("この募集はもう締め切られています。");
 
-  if (action === "newitem") {
+  // pitem は代理入力の ephemeral から開いたモーダル。入れるものは同じで、
+  // 集計メッセージの差し替え方だけが違う
+  if (action === "newitem" || action === "pitem") {
     const name = modalValue(interaction, "item_name");
     // 金額の上限は決めない。表に出るので人間が気づく（合意メモ）
     const price = toNumber(modalValue(interaction, "price"));
@@ -746,19 +860,20 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
     // 代理扱いにしない
     const self = userId(interaction);
     const proxied = targetId !== undefined && targetId !== self;
-    return updated(
+    const forName = proxied
+      ? modalValue(interaction, "for_name") || "unknown"
+      : displayName(interaction);
+    const stmt = orderStmt(
       env,
       eventId,
-      orderStmt(
-        env,
-        eventId,
-        proxied ? targetId : self,
-        proxied ? modalValue(interaction, "for_name") || "unknown" : displayName(interaction),
-        name,
-        price,
-        proxied ? displayName(interaction) : null,
-      ),
+      proxied ? targetId : self,
+      forName,
+      name,
+      price,
+      proxied ? displayName(interaction) : null,
     );
+    if (action === "pitem") return fromEphemeral(env, ctx, eventId, forName, stmt);
+    return updated(env, eventId, stmt);
   }
 
   if (action === "domenu") {

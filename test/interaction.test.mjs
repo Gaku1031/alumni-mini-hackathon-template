@@ -418,6 +418,66 @@ describe("代理で入れる", () => {
     );
   }
 
+  // 既出の品は選べたほうが速い。モーダルにセレクトは入れられないので、
+  // 相手を選んだあとに本人だけに見えるメニューを出す
+  test("既出の品があるときは、相手を選ぶとメニューが出る", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 650);
+
+    const res = await pickUser(ev, "u9", "じろう");
+    assert.equal(res.type, 4);
+    assert.equal(res.data.flags, 64);
+    assert.match(res.data.content, /じろう/);
+    const [menu, manual] = res.data.components.map((r) => r.components[0]);
+    assert.equal(menu.custom_id, `ppick:${ev}:u9:じろう`);
+    assert.deepEqual(
+      menu.options.map((o) => o.value),
+      ["650:唐揚げ弁当"],
+    );
+    assert.equal(manual.custom_id, `pnew:${ev}:u9:じろう`);
+  });
+
+  test("メニューから選べば、そのまま相手の注文になる", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 650, { user: "u1", name: "たろう" });
+
+    const res = await select(`${ev}:u9:じろう`, "ppick", "650:唐揚げ弁当", {
+      user: "u1",
+      name: "たろう",
+    });
+    // 押したのは ephemeral の上なので、返事は ephemeral の差し替えになる。
+    // 集計メッセージのほうは bot が別に書き換える
+    assert.equal(res.type, 7);
+    assert.match(res.data.content, /じろう の分を入れました/);
+    assert.deepEqual(res.data.components, []);
+
+    const after = await board(ev);
+    assert.equal(counted(after.content), 2);
+    assert.match(after.content, /じろう（たろうが代理入力）/);
+  });
+
+  test("メニューに無いものは、そこからモーダルで入れられる", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 650, { user: "u1", name: "たろう" });
+
+    const modal = await button(`${ev}:u9:じろう`, "pnew", { user: "u1", name: "たろう" });
+    assert.equal(modal.type, 9);
+    assert.equal(modal.data.custom_id, `pitem:${ev}:u9`);
+    assert.equal(modal.data.components[0].components[0].value, "じろう");
+
+    const res = await submit(
+      `${ev}:u9`,
+      "pitem",
+      { for_name: "じろう", item_name: "そば", price: "500" },
+      { user: "u1", name: "たろう" },
+    );
+    assert.equal(res.type, 7);
+    assert.match(res.data.content, /じろう の分を入れました/);
+
+    const after = await board(ev);
+    assert.match(after.content, /そば.*じろう（たろうが代理入力）/);
+  });
+
   test("相手を選ぶと「誰の分」が埋まったモーダルが返る", async () => {
     const res = await pickUser(nextEvent(), "u9", "じろう");
     assert.equal(res.type, 9);
