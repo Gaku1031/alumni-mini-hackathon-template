@@ -128,7 +128,7 @@ dl.glossary dd{margin:2px 0 0;font-size:13.5px;color:var(--ink-2);line-height:1.
  [ 頼む ▼ ]  [ 新しく入力 ]  [ 取り消す ▼ ]  [ 締め切る ]</div>
   <p class="src">図1: 注文フェーズの集計メッセージ。誰かが注文するたびに Bot がこのメッセージ自体を書き換える（新しいメッセージを投稿するのではない）。</p>
 
-  <p>幹事が <code>[ 締め切る ]</code> を押すと、配送料を入力する小さな入力欄が開く。そこで金額が確定し、メッセージが集金モードに切り替わる。</p>
+  <p>幹事が <code>[ 締め切る ]</code> を押すと、みんなで割る費用と支払先を入力する小さな入力欄が開く。そこで金額が確定し、メッセージが集金モードに切り替わる。支払先は自由文字列で、PayPayの電話番号でも送金リンクでも振込先の口座でもよい。同じサーバーで前回使った値が初期値に入る。</p>
 
 <div class="mock"><b>📌 9/15(月) お弁当</b>
 
@@ -140,9 +140,12 @@ dl.glossary dd{margin:2px 0 0;font-size:13.5px;color:var(--ink-2);line-height:1.
 配送料は6人で均等割 → ¥84（端数切り上げ・余り¥4は幹事）
 
 💰 集金 4/6      未払い: jiro, saki
-送金先 → https://paypay.me/xxxx
 
- [ 支払った ]  [ 未払いに戻す ▼ ]</div>
+💳 支払先
+PayPay 090-1234-5678
+〇〇銀行 △△支店 普通 1234567 ヤマダタロウ
+
+ [ 支払った ]  [ 未払いに戻す ▼ ]  [ 再開 ]</div>
   <p class="src">図2: 集金フェーズ。<strong>配送料は均等割だが、弁当の値段が違うので各自の支払額は全員バラバラ。</strong>だから行ごとに実際に送る金額を書く。暗算させない。</p>
 </section>
 
@@ -365,6 +368,7 @@ where event_id = $1;</code></pre>
   menu_url     text,
   status       text not null default 'open' check (status in ('open', 'closed')),
   shared_costs text not null default '[]',  -- JSON: [{"label":"配送料","amount":500}]
+  payment_info text,                        -- 締め切るときに入れる送金先。自由文字列
   created_at   text not null default (datetime('now'))
 );
 
@@ -380,12 +384,7 @@ create table bento_orders (
   unique (event_id, discord_user_id)           -- ← 1人1個をここで担保する
 );
 
-create index idx_bento_orders_event on bento_orders (event_id);
-
-create table guild_settings (
-  guild_id   text primary key,
-  paypay_url text
-);</code></pre>
+create index idx_bento_orders_event on bento_orders (event_id);</code></pre>
 
   <p class="note"><strong>D1 の中身は SQLite なので、PostgreSQL の書き方はそのまま通らない。</strong>型は少なく、<code>uuid</code> も <code>boolean</code> も <code>jsonb</code> も無い。ID は <code>crypto.randomUUID()</code> でアプリ側が作って <code>text</code> に入れ、真偽値は <code>0</code> / <code>1</code>、JSON は文字列で持って読むときに <code>JSON.parse</code> する。日時も文字列。</p>
 
@@ -484,7 +483,6 @@ create table guild_settings (
     <caption>表6: 未決事項</caption>
     <thead><tr><th style="width:34%">論点</th><th style="width:22%">いつまでに</th><th>補足</th></tr></thead>
     <tbody>
-      <tr><td>PayPay リンクの登録方法</td><td>step 4 まで</td><td><code>/bento-setup</code> を別に作るか、最初の <code>/bento</code> のモーダルに混ぜるか。どちらでも軽い</td></tr>
       <tr><td>表示名をいつ保存するか</td><td>step 5 まで</td><td>Discord のニックネームは変わる。注文した時点の名前を焼き込む前提でよいか</td></tr>
       <tr><td>集計メッセージの pin</td><td>step 4 まで</td><td>Bot に自動で pin させるなら <code>Manage Messages</code> 権限が必要。幹事が手で pin してもいい</td></tr>
       <tr><td>同じチャンネルで2件同時に走った場合</td><td>実運用前</td><td>破綻はしないが pin が2枚になって紛らわしい。1チャンネル1件に制限するかどうか</td></tr>

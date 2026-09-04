@@ -29,6 +29,8 @@ type BentoEvent = {
   menu_url: string | null;
   status: "open" | "closed";
   shared_costs: string;
+  /** 締め切るときに幹事が入れる送金先。PayPayのリンクでも電話番号でも口座でもいい */
+  payment_info: string | null;
 };
 
 type BentoOrder = {
@@ -61,19 +63,25 @@ async function verifySignature(req: Request, rawBody: string, publicKey: string)
   const timestamp = req.headers.get("x-signature-timestamp");
   if (!signature || !timestamp) return false;
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    hexToBytes(publicKey),
-    { name: "Ed25519" },
-    false,
-    ["verify"],
-  );
-  return crypto.subtle.verify(
-    { name: "Ed25519" },
-    key,
-    hexToBytes(signature),
-    new TextEncoder().encode(timestamp + rawBody),
-  );
+  // Ed25519 の署名は64バイト固定。長さや16進が壊れていると verify は false ではなく
+  // 例外を投げる。公開エンドポイントなのでゴミも飛んでくる。落として500にせず401に寄せる
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      hexToBytes(publicKey),
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
+    return await crypto.subtle.verify(
+      { name: "Ed25519" },
+      key,
+      hexToBytes(signature),
+      new TextEncoder().encode(timestamp + rawBody),
+    );
+  } catch {
+    return false;
+  }
 }
 
 function json(body: unknown) {
@@ -89,6 +97,11 @@ function reply(content: string) {
 
 function yen(n: number) {
   return `¥${n.toLocaleString("en-US")}`;
+}
+
+/** 「１,０００円」のような全角・記号混じりから数字だけ取り出す。IME の全角入力で落ちないように */
+function toNumber(s: string) {
+  return Number.parseInt(s.normalize("NFKC").replace(/[^0-9]/g, ""), 10);
 }
 
 /** interaction を送ってきた人の、そのサーバーでの表示名 */
@@ -120,7 +133,7 @@ async function discord(path: string, token: string, init: RequestInit = {}) {
  * 集計メッセージの本体。注文が入るたびにこれを描き直して差し替える。
  * 品名+価格でグルーピングするので、行に実額を出せば全員分の支払額がカバーできる。
  */
-function render(ev: BentoEvent, orders: BentoOrder[], paypayUrl: string | null) {
+function render(ev: BentoEvent, orders: BentoOrder[]) {
   const shared: SharedCost[] = JSON.parse(ev.shared_costs);
   const sharedTotal = shared.reduce((s, c) => s + c.amount, 0);
   // 端数は切り上げ。余りは幹事が飲む（合意メモの通り）
@@ -168,12 +181,22 @@ function render(ev: BentoEvent, orders: BentoOrder[], paypayUrl: string | null) 
     lines.push("");
     lines.push(`💰 集金 ${orders.length - unpaid.length}/${orders.length}`);
     if (unpaid.length > 0) lines.push(`未払い: ${unpaid.map((o) => o.display_name).join(", ")}`);
-    if (paypayUrl) lines.push(`送金先 → ${paypayUrl}`);
+    // 送金先は口座番号のように複数行のこともあるので、1行に押し込めず改行のまま出す
+    if (ev.payment_info) lines.push("", `💳 **支払先**`, ev.payment_info);
   }
 
-  return lines.join("\n");
+  // Discord のメッセージは2000文字まで。超えると差し替えが 400 で弾かれ、
+  // 押した人には「この操作に失敗しました」としか出ない。溢れたと分かる形で切る
+  const out = lines.join("\n");
+  if (out.length <= 2000) return out;
+  return `${out.slice(0, 1900)}\n…（長くなりすぎたので省略しました）`;
 }
 
+/**
+ * ponytail: セレクトの選択肢は Discord の上限で25件まで。26人目からは
+ * 一覧に出ないので「取り消す」から選べない（注文は「新しく入力」でできる）。
+ * 26人以上で回すことになったら、ページ送りか名前での絞り込みを足す。
+ */
 function components(ev: BentoEvent, orders: BentoOrder[]) {
   const rows: unknown[] = [];
 
@@ -242,9 +265,13 @@ function components(ev: BentoEvent, orders: BentoOrder[]) {
       });
     }
 
+    // 締め切りは押し間違えると詰む操作なので、開き直す出口を必ず残す
     rows.push({
       type: 1,
-      components: [{ type: 2, style: 3, label: "支払った", custom_id: `pay:${ev.id}` }],
+      components: [
+        { type: 2, style: 3, label: "支払った", custom_id: `pay:${ev.id}` },
+        { type: 2, style: 2, label: "再開", custom_id: `reopen:${ev.id}` },
+      ],
     });
   }
 
@@ -264,12 +291,8 @@ async function board(env: Env, eventId: string) {
     .bind(eventId)
     .all<BentoOrder>();
 
-  const settings = await env.DB.prepare("select paypay_url from guild_settings where guild_id = ?")
-    .bind(ev.guild_id)
-    .first<{ paypay_url: string | null }>();
-
   return {
-    content: render(ev, results, settings?.paypay_url ?? null),
+    content: render(ev, results),
     components: components(ev, results),
   };
 }
@@ -279,7 +302,14 @@ function gone() {
   return reply("この募集はもうありません。");
 }
 
-/** 更新後の集計メッセージで、押された元メッセージをそのまま差し替える */
+/**
+ * 更新後の集計メッセージで、押された元メッセージをそのまま差し替える。
+ *
+ * ponytail: 2人がほぼ同時に押すと、後から届いたほうの差し替えが古い盤面で
+ * 上書きすることがある。DB は正しいままで、次に誰かが押せば直る。
+ * 直すなら集計メッセージに版番号を持たせて条件付き更新にするが、
+ * ずれるのが表示だけで自然に治る以上、割に合わない。
+ */
 async function updated(env: Env, eventId: string) {
   const payload = await board(env, eventId);
   if (!payload) return gone();
@@ -305,15 +335,6 @@ function createEvent(interaction: any, env: Env, ctx: ExecutionContext) {
 
   ctx.waitUntil(
     (async () => {
-      const paypay = opts.get("paypay");
-      if (paypay) {
-        await env.DB.prepare(
-          "insert into guild_settings (guild_id, paypay_url) values (?, ?) on conflict(guild_id) do update set paypay_url = excluded.paypay_url",
-        )
-          .bind(interaction.guild_id, paypay)
-          .run();
-      }
-
       await env.DB.prepare(
         "insert into bento_events (id, guild_id, channel_id, title, menu_url) values (?, ?, ?, ?, ?)",
       )
@@ -388,7 +409,11 @@ function itemModal(eventId: string) {
   });
 }
 
-function closeModal(eventId: string) {
+/**
+ * 締め切りの入力欄。割り勘する費用と、集金の送金先。
+ * 送金先は前回の値を初期値に入れておくので、幹事が同じなら触らず閉じるだけで済む。
+ */
+function closeModal(eventId: string, lastPaymentInfo: string | null) {
   return json({
     type: MODAL,
     data: {
@@ -405,6 +430,23 @@ function closeModal(eventId: string) {
               style: 2,
               placeholder: "配送料 500",
               required: false,
+            },
+          ],
+        },
+        {
+          type: 1,
+          components: [
+            {
+              type: 4,
+              custom_id: "payment",
+              label: "支払先",
+              style: 2,
+              // 何を書けばいいのかはここで示す。形式は問わない
+              placeholder:
+                "PayPay 090-1234-5678\nPayPayリンク https://pay.paypay.ne.jp/xxxxxxxx\n〇〇銀行 △△支店 普通 1234567 ヤマダタロウ",
+              max_length: 400,
+              required: false,
+              value: lastPaymentInfo ?? undefined,
             },
           ],
         },
@@ -448,17 +490,42 @@ async function upsertOrder(
 async function handleComponent(interaction: any, env: Env) {
   const [action, eventId] = interaction.data.custom_id.split(":");
 
-  const ev = await env.DB.prepare("select id from bento_events where id = ?")
+  // 状態と、締め切りモーダルの初期値を1回で引く。
+  // last_payment は「このイベントの支払先、無ければ同じサーバーで最後に使った支払先」
+  const ev = await env.DB.prepare(
+    `select e.status,
+            coalesce(e.payment_info,
+              (select p.payment_info from bento_events p
+                where p.guild_id = e.guild_id and p.payment_info is not null
+                order by p.created_at desc limit 1)) as last_payment
+       from bento_events e where e.id = ?`,
+  )
     .bind(eventId)
-    .first<{ id: string }>();
+    .first<{ status: "open" | "closed"; last_payment: string | null }>();
   if (!ev) return gone();
+
+  // 集計メッセージが古いまま押されることがある。締め切り済みに注文を入れさせない、
+  // 締め切り前に集金を触らせない。ボタンの見た目ではなく DB の状態で決める
+  const whileOpen = action === "new" || action === "pick" || action === "cancel";
+  if ((whileOpen || action === "close") && ev.status === "closed") {
+    return reply("この募集はもう締め切られています。");
+  }
+  if (!whileOpen && action !== "close" && ev.status === "open") {
+    return reply("この募集はまだ開いています。");
+  }
 
   switch (action) {
     case "new":
       return itemModal(eventId);
 
     case "close":
-      return closeModal(eventId);
+      return closeModal(eventId, ev.last_payment);
+
+    case "reopen":
+      await env.DB.prepare("update bento_events set status = 'open' where id = ?")
+        .bind(eventId)
+        .run();
+      return updated(env, eventId);
 
     case "pick": {
       // value は "650:唐揚げ弁当"。品名にコロンが入っても壊れないよう最初の1個で切る
@@ -475,13 +542,16 @@ async function handleComponent(interaction: any, env: Env) {
         .run();
       return updated(env, eventId);
 
-    case "pay":
-      await env.DB.prepare(
+    case "pay": {
+      const r = await env.DB.prepare(
         "update bento_orders set paid = 1 where event_id = ? and discord_user_id = ?",
       )
         .bind(eventId, userId(interaction))
         .run();
+      // 頼んでいない人が押すと0件。何も変わらないと壊れて見えるので本人に返す
+      if (r.meta.changes === 0) return reply("あなたの注文が見つかりません。");
       return updated(env, eventId);
+    }
 
     case "unpay":
       await env.DB.prepare("update bento_orders set paid = 0 where id = ? and event_id = ?")
@@ -498,10 +568,17 @@ async function handleComponent(interaction: any, env: Env) {
 async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
   const [action, eventId] = interaction.data.custom_id.split(":");
 
+  // モーダルは開いたまま放置できる。送信されたときには締め切り済みかもしれない
+  const ev = await env.DB.prepare("select status from bento_events where id = ?")
+    .bind(eventId)
+    .first<{ status: "open" | "closed" }>();
+  if (!ev) return gone();
+  if (ev.status === "closed") return reply("この募集はもう締め切られています。");
+
   if (action === "newitem") {
     const name = modalValue(interaction, "item_name");
     // 金額の上限は決めない。表に出るので人間が気づく（合意メモ）
-    const price = Number.parseInt(modalValue(interaction, "price").replace(/[^0-9]/g, ""), 10);
+    const price = toNumber(modalValue(interaction, "price"));
     if (!name || Number.isNaN(price)) return reply("品名と金額（数字）を入れてください。");
     await upsertOrder(env, interaction, eventId, name, price);
     return updated(env, eventId);
@@ -509,13 +586,24 @@ async function handleModal(interaction: any, env: Env, ctx: ExecutionContext) {
 
   if (action === "doclose") {
     const shared: SharedCost[] = [];
-    for (const line of modalValue(interaction, "shared").split("\n")) {
-      const m = line.trim().match(/^(.*?)[\s　]+([0-9,]+)$/);
+    for (const raw of modalValue(interaction, "shared").split("\n")) {
+      // IME の全角混じり（「配送料　５００」）でも拾えるよう半角に寄せてから読む
+      const m = raw
+        .normalize("NFKC")
+        .trim()
+        .match(/^(.*?)\s+([0-9,]+)$/);
       if (m) shared.push({ label: m[1], amount: Number.parseInt(m[2].replace(/,/g, ""), 10) });
     }
-    await env.DB.prepare("update bento_events set status = 'closed', shared_costs = ? where id = ?")
-      .bind(JSON.stringify(shared), eventId)
+    const payment = modalValue(interaction, "payment");
+
+    // status を条件に入れて、二重に締め切っても2回目は何も起きないようにする。
+    // 締め切り通知の @here を2回飛ばさないための条件でもある
+    const r = await env.DB.prepare(
+      "update bento_events set status = 'closed', shared_costs = ?, payment_info = ? where id = ? and status = 'open'",
+    )
+      .bind(JSON.stringify(shared), payment || null, eventId)
       .run();
+    if (r.meta.changes === 0) return reply("この募集はもう締め切られています。");
 
     const res = await updated(env, eventId);
     // 締め切りだけは1回だけ通知する。以降の未払いの催促は表示のみで通知しない

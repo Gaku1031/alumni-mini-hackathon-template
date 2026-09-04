@@ -11,8 +11,8 @@
     "db:apply": "wrangler d1 migrations apply bento --local",
     "db:apply:remote": "wrangler d1 migrations apply bento --remote",
     "db:console": "wrangler d1 execute bento --local --command",
-    "check": "biome check .",
-    "check:fix": "biome check --write .",
+    "check": "biome check src test scripts biome.json package.json tsconfig.json wrangler.jsonc",
+    "check:fix": "biome check --write src test scripts biome.json package.json tsconfig.json wrangler.jsonc",
     "types": "wrangler types",
     "postinstall": "wrangler types",
     "discord:register": "node scripts/register-commands.mjs"

@@ -1,0 +1,478 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<title>お弁当注文Bot の構成</title>
+<style>
+/* html-report-design 準拠。構造は余白と文字の階層で作る。線と箱で作らない */
+:root{
+  --ink:#1a1a1a; --ink-2:#555555; --ink-3:#8e8e8e;
+  --accent:#173f66; --accent-tint:#eef3f8;
+  --hairline:#d9d9d9; --fill-gray:#e7e9ec; --paper:#ffffff;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Hiragino Kaku Gothic ProN","Yu Gothic",monospace;
+}
+html{color-scheme:light}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic Medium","Yu Gothic",Meiryo,sans-serif;
+  font-size:15px;line-height:1.9;border-top:6px solid var(--accent);
+  -webkit-font-smoothing:antialiased;
+}
+.page{max-width:780px;margin:0 auto;padding:56px clamp(20px,6vw,48px) 96px}
+
+.doc-header{padding-bottom:28px;border-bottom:1px solid var(--ink)}
+.eyebrow{font-size:11px;letter-spacing:.16em;color:var(--ink-3);text-transform:uppercase;margin:0 0 20px}
+h1{font-size:27px;line-height:1.5;letter-spacing:.02em;margin:0 0 12px;font-feature-settings:"palt" 1;text-wrap:balance}
+.lead{font-size:14px;color:var(--ink-2);margin:0 0 24px;max-width:38em}
+.doc-meta{font-size:12px;color:var(--ink-3);display:flex;gap:24px;flex-wrap:wrap}
+
+.page>section{border-top:1px solid var(--hairline);padding-top:44px;margin-top:64px}
+.page>section:first-of-type{border-top:0;padding-top:0;margin-top:56px}
+h2{font-size:19px;letter-spacing:.03em;margin:0;font-feature-settings:"palt" 1}
+h2 .no{color:var(--accent);margin-right:14px;font-variant-numeric:tabular-nums}
+.msg{font-size:16px;font-weight:600;line-height:1.8;margin:18px 0 24px;max-width:36em}
+h3{font-size:15px;margin:36px 0 8px}
+p{margin:0 0 16px;max-width:42em}
+strong{font-weight:700}
+
+ul,ol{margin:0 0 16px;padding-left:1.4em;max-width:41em}
+li{margin-bottom:6px}
+ul{list-style:none;padding-left:1.2em}
+ul li::before{content:"–";float:left;margin-left:-1.2em;color:var(--ink-3)}
+
+.summary{list-style:none;margin:24px 0 0;padding:0;counter-reset:s;max-width:44em}
+.summary li{counter-increment:s;position:relative;padding-left:2.4em;margin-bottom:14px}
+.summary li::before{content:counter(s,decimal-leading-zero);position:absolute;left:0;top:.4em;
+  font-size:12px;font-weight:700;color:var(--accent);letter-spacing:.04em;font-variant-numeric:tabular-nums}
+.summary li::marker{content:none}
+
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;margin:28px 0 8px;font-size:13px;line-height:1.7}
+caption{text-align:left;font-size:12.5px;font-weight:600;margin-bottom:10px}
+th{font-size:12px;font-weight:600;text-align:left;padding:10px 12px;
+  border-top:2px solid var(--ink);border-bottom:1px solid var(--ink);vertical-align:bottom}
+td{padding:10px 12px;border-bottom:1px solid var(--hairline);vertical-align:top}
+th.num,td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr.total td{border-top:1px solid var(--ink);border-bottom:2px solid var(--ink);
+  font-weight:600;background:var(--accent-tint)}
+
+figure{margin:32px 0 8px}
+figcaption{font-size:12.5px;font-weight:600;margin-bottom:14px}
+figure svg{width:100%;height:auto;display:block}
+svg text{font-family:inherit}
+.fig-scroll{overflow-x:auto}
+.src{font-size:11.5px;color:var(--ink-3);margin:6px 0 0}
+.note{font-size:12.5px;color:var(--ink-2);border-left:2px solid var(--accent);
+  padding:2px 0 2px 14px;margin:24px 0 16px;max-width:40em}
+
+/* Discord のメッセージ再現。ここだけは面を持たせる（実物のUIだから） */
+.mock{font-family:var(--mono);font-size:12px;line-height:1.85;white-space:pre;
+  background:var(--accent-tint);padding:18px 20px;margin:24px 0 8px;overflow-x:auto;
+  border-left:3px solid var(--accent)}
+.mock b{font-weight:700;color:var(--accent)}
+code{font-family:var(--mono);font-size:.88em;background:var(--fill-gray);padding:1px 5px}
+pre{font-family:var(--mono);font-size:12px;line-height:1.75;background:var(--fill-gray);
+  padding:16px 18px;margin:20px 0 8px;overflow-x:auto}
+pre code{background:none;padding:0;font-size:inherit}
+
+.chevrons{display:flex;margin:28px 0 8px;min-width:600px}
+.chev{flex:1;padding:10px 10px 10px 22px;font-size:12px;font-weight:600;line-height:1.5;
+  text-align:center;background:var(--fill-gray);margin-left:4px;
+  clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%,12px 50%)}
+.chev:first-child{margin-left:0;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 50%,calc(100% - 12px) 100%,0 100%)}
+.chev.on{background:var(--accent);color:#fff}
+.chev small{display:block;font-size:10.5px;font-weight:500;opacity:.8}
+
+dl.glossary{margin:24px 0 8px;max-width:44em}
+dl.glossary dt{font-weight:700;font-size:13.5px;margin-top:18px}
+dl.glossary dd{margin:2px 0 0;font-size:13.5px;color:var(--ink-2);line-height:1.8}
+
+@media print{body{border-top-width:4px}.page{padding-top:32px}}
+</style>
+<div class="page">
+
+<header class="doc-header">
+  <p class="eyebrow">Alumni Mini Hackathon / 構成解説</p>
+  <h1>お弁当注文Bot の構成 ― 何を使って、どうつながっているか</h1>
+  <p class="lead">動いている Bot が、どの部品でできていて、部品同士がどの順番で呼び合っているのかを一枚で見渡せるようにした資料。Cloudflare も Discord Bot も触ったことがない人を読み手に想定している。「何を作るか・なぜその形にしたか」は <code>docs/bento-design.html</code> にあるので、ここでは仕組みだけを扱う。</p>
+  <div class="doc-meta">
+    <span>2026-09-04</span>
+    <span>Cloudflare Workers / D1</span>
+    <span>自分で書くコードは1ファイル</span>
+  </div>
+</header>
+
+<section>
+  <h2><span class="no">00</span>この資料の要点</h2>
+  <ol class="summary">
+    <li><strong>部品は4つしかない。</strong> Discord、Cloudflare Workers、Cloudflare D1、そしてリポジトリのコード。このうち自分で用意して運用するのは Workers と D1 の2つだけで、書いたコードは <code>src/index.ts</code> の1本に収まっている。</li>
+    <li><strong>画面を作っていない。</strong> 用意したのは Discord のメッセージ1枚だけで、フロントエンドも Web サーバーも管理画面も持たずに済ませている。利用者が見て触るのは Discord のメッセージとそこに並ぶボタンそのもので、このアプリはその本文を書き換えているだけである。</li>
+    <li><strong>つながりは一方通行。</strong> Discord が Worker を叩き、Worker が D1 を読み書きして、その結果を Discord へ返す。逆向きの経路は、この Worker を通る1本きりに絞ってある。</li>
+    <li><strong>読む順番。</strong> 図1で全体を掴み、02〜03で部品をひとつずつ見て、04でボタン1回ぶんの流れを追う。手を動かす段になったら07のファイル対応表から入るとよい。</li>
+  </ol>
+</section>
+
+<section>
+  <h2><span class="no">01</span>登場人物は4つだけ</h2>
+  <p class="msg">端末からデータベースまで通して見ても、自分で立てて面倒を見るサーバーが1台も無い。</p>
+
+  <p>ふつうの Web サービスを作ろうとすると、画面を描くフロントエンド、リクエストを受け付ける Web サーバー、データを置くデータベース、そしてそれらを載せるサーバーやコンテナが要る。この Bot にあるのは Discord と Cloudflare という2社のサービスだけで、間をつなぐために自分で書いたコードは1ファイルに収まる。</p>
+
+  <p>なぜここまで減らせるのか？ 理由は、画面をまるごと Discord に任せているところにある。注文の一覧も、押すボタンも、入力フォームも、Discord がすでに持っている部品を組み合わせて出している。こちらが用意するのは「いま注文が何件あるか」を答える処理だけで済む。</p>
+
+  <figure>
+    <figcaption>図1: 部品の並びと、リクエストが流れる向き</figcaption>
+    <div class="fig-scroll">
+    <svg viewBox="0 0 720 320" role="img" aria-label="参加者のDiscordアプリからDiscordを経由してCloudflare上のWorkerに届き、WorkerがD1を読み書きして結果をDiscordへ返す構成図">
+      <g font-size="12">
+        <rect x="432" y="32" width="288" height="248" fill="none" stroke="#8e8e8e" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="456" y="52" font-size="11" fill="#8e8e8e">Cloudflare アカウント内</text>
+
+        <rect x="0" y="64" width="120" height="88" fill="#e7e9ec"/>
+        <text x="60" y="100" text-anchor="middle" font-weight="700" fill="#1a1a1a">参加者・幹事</text>
+        <text x="60" y="122" text-anchor="middle" font-size="11" fill="#555555">Discordアプリ</text>
+
+        <rect x="192" y="64" width="120" height="88" fill="#e7e9ec"/>
+        <text x="252" y="100" text-anchor="middle" font-weight="700" fill="#1a1a1a">Discord</text>
+        <text x="252" y="122" text-anchor="middle" font-size="11" fill="#555555">画面とボタン</text>
+
+        <rect x="456" y="64" width="240" height="88" fill="#173f66"/>
+        <text x="576" y="100" text-anchor="middle" font-weight="700" fill="#ffffff">Workers</text>
+        <text x="576" y="122" text-anchor="middle" font-size="11" fill="#ffffff" opacity="0.85">src/index.ts（1ファイル）</text>
+
+        <rect x="456" y="200" width="240" height="64" fill="#e7e9ec"/>
+        <text x="576" y="228" text-anchor="middle" font-weight="700" fill="#1a1a1a">D1</text>
+        <text x="576" y="248" text-anchor="middle" font-size="11" fill="#555555">SQLite。イベントと注文</text>
+
+        <line x1="120" y1="92" x2="184" y2="92" stroke="#173f66" stroke-width="1.5"/>
+        <path d="M188 92 L180 88 L180 96 Z" fill="#173f66"/>
+        <text x="156" y="38" text-anchor="middle" font-size="10.5" fill="#555555">①コマンドや</text>
+        <text x="156" y="52" text-anchor="middle" font-size="10.5" fill="#555555">ボタンを押す</text>
+
+        <line x1="312" y1="92" x2="448" y2="92" stroke="#173f66" stroke-width="1.5"/>
+        <path d="M452 92 L444 88 L444 96 Z" fill="#173f66"/>
+        <text x="380" y="38" text-anchor="middle" font-size="10.5" fill="#555555">②誰が押したか</text>
+        <text x="380" y="52" text-anchor="middle" font-size="10.5" fill="#555555">＋Ed25519署名</text>
+
+        <line x1="452" y1="128" x2="316" y2="128" stroke="#173f66" stroke-width="1.5" stroke-dasharray="4 4"/>
+        <path d="M312 128 L320 124 L320 132 Z" fill="#173f66"/>
+        <text x="380" y="176" text-anchor="middle" font-size="10.5" fill="#555555">⑤描き直した</text>
+        <text x="380" y="190" text-anchor="middle" font-size="10.5" fill="#555555">本文（JSON）</text>
+
+        <line x1="184" y1="128" x2="124" y2="128" stroke="#173f66" stroke-width="1.5" stroke-dasharray="4 4"/>
+        <path d="M120 128 L128 124 L128 132 Z" fill="#173f66"/>
+        <text x="156" y="176" text-anchor="middle" font-size="10.5" fill="#555555">⑥書き換わった</text>
+        <text x="156" y="190" text-anchor="middle" font-size="10.5" fill="#555555">メッセージ</text>
+
+        <line x1="576" y1="156" x2="576" y2="192" stroke="#173f66" stroke-width="1.5"/>
+        <path d="M576 196 L572 188 L580 188 Z" fill="#173f66"/>
+        <path d="M576 152 L572 160 L580 160 Z" fill="#173f66"/>
+        <text x="560" y="170" text-anchor="end" font-size="10.5" fill="#555555">③注文を保存</text>
+        <text x="560" y="184" text-anchor="end" font-size="10.5" fill="#555555">④全注文を読む</text>
+
+        <text x="360" y="308" text-anchor="middle" font-size="10.5" fill="#555555">D1 へ外から届く線は無い。Worker を通る以外の入口が存在しない。</text>
+      </g>
+    </svg>
+    </div>
+    <p class="src">出所: src/index.ts、wrangler.jsonc</p>
+  </figure>
+
+  <div class="tbl">
+  <table>
+    <caption>表1: 使っているものと、その役割</caption>
+    <thead>
+      <tr><th>名前</th><th>何をする</th><th>ふつうなら代わりに置くもの</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><strong>Discord</strong></td><td>画面・ボタン・入力フォーム・ログイン済みのユーザー情報を提供する</td><td>React などのフロントエンドと、ログイン機能</td></tr>
+      <tr><td><strong>Cloudflare Workers</strong></td><td>Discord から届いた1本の POST を処理して、返す本文を組み立てる</td><td>EC2 や Render に常駐させた Node.js の Web サーバー</td></tr>
+      <tr><td><strong>Cloudflare D1</strong></td><td>イベントと注文を保存する。SQL で読み書きする</td><td>RDS の PostgreSQL、Supabase など</td></tr>
+      <tr><td><strong>Wrangler</strong></td><td>デプロイ、D1 の作成とマイグレーション、secret の登録を行う CLI</td><td>Docker と CI、マイグレーションツール</td></tr>
+      <tr><td><strong>Biome</strong></td><td>Lint と整形をまとめて担当する</td><td>ESLint と Prettier の2本立て</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="note">ランタイムの依存パッケージはゼロ。<code>package.json</code> に入っているのは wrangler・TypeScript・Biome の3つで、いずれも開発用で、本番の Worker に載るのは自分のコードだけである。</p>
+</section>
+
+<section>
+  <h2><span class="no">02</span>Cloudflare Workers ― 呼ばれたときだけ起きる</h2>
+  <p class="msg">Worker は待機し続けるプロセスではなく、リクエストが届いた瞬間に起きて返事を書いたら消える関数である。</p>
+
+  <p>サーバーと聞いて多くの人が思い浮かべるのは、電源を入れっぱなしにしてリクエストを待っている機械だろう。Workers はそれとはまったく別の形をとる。コードを置いておくと、Cloudflare が世界中のデータセンターにそれを配り、リクエストが来た地点で必要なぶんだけ実行する。誰も注文しない日には何も起きないまま過ぎるので、費用も0円で済む。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表2: 常駐サーバーとの違い</caption>
+    <thead>
+      <tr><th>観点</th><th>一般的なサーバー（VPS / EC2）</th><th>Cloudflare Workers</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>動いている時間</td><td>常時。夜中も待機している</td><td>リクエストの処理中だけ</td></tr>
+      <tr><td>費用の数え方</td><td>起動していた時間</td><td>リクエストの回数と CPU 時間</td></tr>
+      <tr><td>使わない期間</td><td>料金は発生し続ける</td><td>0回なら0円。休止もしない</td></tr>
+      <tr><td>デプロイ</td><td>イメージを作って配置し、プロセスを入れ替える</td><td><code>npm run deploy</code> の1回</td></tr>
+      <tr><td>使える API</td><td>Node.js のすべて（<code>fs</code> なども）</td><td>ブラウザ寄り。<code>fetch</code> と <code>crypto.subtle</code> はあるが <code>fs</code> は無い</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>Worker の入口は <code>export default { fetch(req, env, ctx) }</code> という形をしていて、このアプリが受け取る POST は1種類きりで足りている。パスによる振り分けが要らないので、Express や Hono のようなルーティングのライブラリも入れていない。<code>req.method</code> を見て、あとは Discord が送ってきた <code>interaction.type</code> で分岐するだけで足りている。</p>
+
+  <p>署名の検証に使う Ed25519 も、外部のライブラリではなくランタイムに組み込みの <code>crypto.subtle</code> で処理している。npm から何かを足す前に、Workers が最初から持っていないかを確かめる癖をつけると、この構成の軽さは保たれる。</p>
+</section>
+
+<section>
+  <h2><span class="no">03</span>Cloudflare D1 ― ネットワーク上に住所を持たないDB</h2>
+  <p class="msg">D1 には接続文字列もパスワードも無い。設定ファイルに書いた binding を通してしか開かない。</p>
+
+  <p>PostgreSQL や MySQL を使ったことがあれば、<code>postgres://user:pass@host:5432/db</code> のような接続文字列を環境変数に入れた記憶があるはずだ。D1 にはそれが無い。<code>wrangler.jsonc</code> に <code>"binding": "DB"</code> と書いておくと、Worker のコードから <code>env.DB</code> という変数として現れる。渡ってくるのはネットワークの接続先ではなくオブジェクトなので、鍵が漏れるという事故がそもそも起こらない。</p>
+
+  <pre><code>const rows = await env.DB.prepare(
+  "select * from bento_orders where event_id = ?",
+).bind(eventId).all();</code></pre>
+
+  <p>値は必ず <code>?</code> と <code>.bind()</code> で渡す。文字列を連結して SQL を組み立てると、品名に <code>'</code> を含む注文が入っただけで壊れるうえ、SQL インジェクションの経路にもなる。</p>
+
+  <figure>
+    <figcaption>図2: テーブルは2つ。イベント1件に注文が何件もぶら下がる</figcaption>
+    <div class="fig-scroll">
+    <svg viewBox="0 0 720 300" role="img" aria-label="bento_events テーブルと bento_orders テーブルの構造と、1対Nの関係を示すER図">
+      <g font-size="11.5">
+        <rect x="0" y="40" width="288" height="28" fill="#173f66"/>
+        <text x="16" y="59" font-weight="700" fill="#ffffff" font-size="12.5">bento_events</text>
+        <rect x="0" y="68" width="288" height="200" fill="#ffffff" stroke="#d9d9d9" stroke-width="1"/>
+        <text x="16" y="88" font-weight="700" fill="#1a1a1a">id</text><text x="272" y="88" text-anchor="end" fill="#8e8e8e">text / UUID</text>
+        <text x="16" y="110" fill="#1a1a1a">guild_id</text><text x="272" y="110" text-anchor="end" fill="#8e8e8e">サーバー</text>
+        <text x="16" y="132" fill="#1a1a1a">channel_id</text><text x="272" y="132" text-anchor="end" fill="#8e8e8e">チャンネル</text>
+        <text x="16" y="154" fill="#1a1a1a">message_id</text><text x="272" y="154" text-anchor="end" fill="#8e8e8e">書き換える対象</text>
+        <text x="16" y="176" fill="#1a1a1a">title / menu_url</text>
+        <text x="16" y="198" fill="#1a1a1a">status</text><text x="272" y="198" text-anchor="end" fill="#8e8e8e">open / closed</text>
+        <text x="16" y="220" fill="#1a1a1a">shared_costs</text><text x="272" y="220" text-anchor="end" fill="#8e8e8e">JSON文字列</text>
+        <text x="16" y="242" fill="#1a1a1a">payment_info</text><text x="272" y="242" text-anchor="end" fill="#8e8e8e">送金先</text>
+        <text x="16" y="262" fill="#1a1a1a">created_at</text>
+
+        <rect x="432" y="40" width="288" height="28" fill="#173f66"/>
+        <text x="448" y="59" font-weight="700" fill="#ffffff" font-size="12.5">bento_orders</text>
+        <rect x="432" y="68" width="288" height="178" fill="#ffffff" stroke="#d9d9d9" stroke-width="1"/>
+        <text x="448" y="88" font-weight="700" fill="#1a1a1a">id</text><text x="700" y="88" text-anchor="end" fill="#8e8e8e">text / UUID</text>
+        <text x="448" y="110" font-weight="700" fill="#173f66">event_id</text><text x="700" y="110" text-anchor="end" fill="#8e8e8e">→ bento_events.id</text>
+        <text x="448" y="132" fill="#1a1a1a">discord_user_id</text>
+        <text x="448" y="154" fill="#1a1a1a">display_name</text><text x="700" y="154" text-anchor="end" fill="#8e8e8e">表示名の写し</text>
+        <text x="448" y="176" fill="#1a1a1a">item_name / price</text>
+        <text x="448" y="198" fill="#1a1a1a">paid</text><text x="700" y="198" text-anchor="end" fill="#8e8e8e">0 か 1</text>
+        <text x="448" y="220" fill="#1a1a1a">created_at</text>
+        <text x="448" y="240" fill="#8e8e8e" font-size="10.5">unique (event_id, discord_user_id)</text>
+
+        <line x1="288" y1="152" x2="428" y2="152" stroke="#173f66" stroke-width="1.5"/>
+        <text x="304" y="144" font-size="11" fill="#173f66" font-weight="700">1</text>
+        <text x="412" y="144" text-anchor="end" font-size="11" fill="#173f66" font-weight="700">N</text>
+        <text x="358" y="176" text-anchor="middle" font-size="10.5" fill="#555555">on delete cascade</text>
+
+        <text x="0" y="292" font-size="10.5" fill="#555555">unique 制約が「1人1個まで」を構造で保証する。2回目の注文は insert ではなく上書きになる。</text>
+      </g>
+    </svg>
+    </div>
+    <p class="src">出所: migrations/0001_init.sql、migrations/0002_add_payment_info.sql</p>
+  </figure>
+
+  <p>D1 の実体は SQLite なので、PostgreSQL の語彙はそのままでは通らない。<code>uuid</code> 型も <code>boolean</code> 型も <code>jsonb</code> 型も存在しないため、ID は <code>crypto.randomUUID()</code> の文字列を <code>text</code> に入れ、真偽値は <code>0</code> と <code>1</code> の整数で持ち、JSON は文字列のまま入れて読むときに <code>JSON.parse</code> している。</p>
+
+  <p>初学者がいちばん引っかかるのは、じつはここから先の落とし穴のほうだろう。<strong>ローカルの D1 と本番の D1 は完全に別物である。</strong> <code>npm run db:apply</code> は手元のファイルにテーブルを作るだけなので、これだけ打って本番にアクセスすると <code>no such table</code> で落ちる。本番へ反映するには <code>npm run db:apply:remote</code> をもう一度打つ必要がある。</p>
+
+  <p>スキーマを変えるときは、既存のマイグレーションファイルを書き換えてはいけない。すでに適用済みのファイルを直しても、適用済みと記録されている本番では二度と実行されないからだ。<code>npm run db:new -- 名前</code> で新しいファイルを足す。</p>
+</section>
+
+<section>
+  <h2><span class="no">04</span>ボタンを1回押すと何が起きるか</h2>
+  <p class="msg">押されるたびに全注文を読み直してメッセージを丸ごと描き直している。差分の更新はしていない。</p>
+
+  <p>参加者が「頼む」のプルダウンから唐揚げ弁当を選んだとしよう。そこから表示が変わるまでに、次の順番で処理が進む。</p>
+
+  <ol>
+    <li>Discord が Worker へ POST を送る。本文には、押した人の ID と表示名、押されたボタンの <code>custom_id</code>、そして Ed25519 の署名が入っている。</li>
+    <li>Worker はまず <code>await req.text()</code> で本文を文字列のまま受け取り、署名を検証する。ここで失敗したら 401 を返して終わる。</li>
+    <li>検証を通ってから <code>JSON.parse</code> し、<code>custom_id</code> を <code>:</code> で割って操作の種類（<code>pick</code>）とイベントID を取り出す。</li>
+    <li>イベントの <code>status</code> を D1 から引く。締め切り済みなら、ボタンが残って見えていても注文は受け付けない。<strong>判断の根拠は画面ではなく DB に置く</strong>という原則がここに出ている。</li>
+    <li>注文を <code>insert ... on conflict do update</code> で書き込む。同じ人の2回目は行が増えるのではなく上書きになる。</li>
+    <li>そのイベントの注文を全件読み直し、<code>render()</code> で本文の文字列を、<code>components()</code> でボタンの配列を組み立てる。</li>
+    <li><code>{ type: 7 }</code> を返す。Discord はこれを見て、押された元のメッセージを丸ごと差し替える。</li>
+  </ol>
+
+  <p>注目してほしいのは6番目である。誰かの1件のために全件を読み直すのは、無駄ではないのだろうか？ この方式には「表示は必ず DB の現在値と一致する」という性質がある。差分更新にすると、更新を1回取りこぼしただけで画面と実態がずれ、しかもずれたことに誰も気づけない。数十件までの規模なら、丸ごと描き直すほうが安全で、コードもずっと短くなる。</p>
+
+  <p>メニューのプルダウンにも同じ考え方が効いている。品名の一覧を保持するテーブルは無く、<strong>すでに入っている注文をそのままメニューとして並べている</strong>。1人目が手で入力すると、2人目からはそれが選択肢になる。</p>
+</section>
+
+<section>
+  <h2><span class="no">05</span>3秒の壁が、コードの形を決めている</h2>
+  <p class="msg">Discord は3秒返事が来ないと失敗表示に切り替える。この制約が2種類の応答パターンを生んでいる。</p>
+
+  <p>Discord の Interactions には厳しい時間制限がある。ボタンが押されてから3秒以内に何かを返さないと、押した人の画面には「アプリケーションが応答しませんでした」と出てしまう。その後にこちらが正しい結果を返しても、もう手遅れになる。</p>
+
+  <p>そこで、処理の重さに応じて返し方を2つ使い分けている。</p>
+
+  <figure>
+    <figcaption>図3: 2つの応答パターンと3秒の締め切り</figcaption>
+    <div class="fig-scroll">
+    <svg viewBox="0 0 720 268" role="img" aria-label="ボタン操作はtype7で3秒以内に完結し、bentoコマンドはtype5を先に返してからwaitUntilで残りの処理を続けることを示すタイムライン">
+      <g font-size="12">
+        <line x1="560" y1="32" x2="560" y2="228" stroke="#1a1a1a" stroke-width="1" stroke-dasharray="4 4"/>
+        <text x="560" y="24" text-anchor="middle" font-size="11" font-weight="700" fill="#1a1a1a">3秒</text>
+
+        <text x="0" y="70" font-size="11" font-weight="700" fill="#1a1a1a">ボタン操作</text>
+        <text x="0" y="86" font-size="10.5" fill="#555555">頼む・取り消す・支払った</text>
+        <rect x="176" y="56" width="216" height="32" fill="#173f66"/>
+        <text x="284" y="77" text-anchor="middle" font-size="10.5" fill="#ffffff">署名検証 → D1 → 描画 → type 7</text>
+        <text x="404" y="77" font-size="10.5" fill="#555555">ここで完結する</text>
+
+        <text x="0" y="150" font-size="11" font-weight="700" fill="#1a1a1a">/bento</text>
+        <text x="0" y="166" font-size="10.5" fill="#555555">募集をはじめる</text>
+        <rect x="176" y="136" width="72" height="32" fill="#173f66"/>
+        <text x="212" y="157" text-anchor="middle" font-size="10.5" fill="#ffffff">type 5</text>
+        <rect x="248" y="136" width="360" height="32" fill="#e7e9ec"/>
+        <text x="428" y="157" text-anchor="middle" font-size="10.5" fill="#1a1a1a">ctx.waitUntil：D1に保存 → Discordへ投稿 → message_id を保存</text>
+
+        <text x="212" y="192" text-anchor="middle" font-size="10.5" fill="#555555">先に「考え中」だけ返す</text>
+        <text x="428" y="192" text-anchor="middle" font-size="10.5" fill="#555555">返事のあとも処理は続けられる</text>
+
+        <text x="0" y="252" font-size="10.5" fill="#555555">Discord API への POST が挟まる操作だけが deferred を要する。D1 の読み書きだけなら3秒に十分収まる。</text>
+      </g>
+    </svg>
+    </div>
+    <p class="src">出所: src/index.ts の createEvent / handleComponent</p>
+  </figure>
+
+  <p><strong>ひとつめは <code>type: 7</code>（UPDATE_MESSAGE）。</strong> 押された元のメッセージをその場で差し替える返し方で、注文・取り消し・支払い済みの操作はすべてこれで処理している。D1 を読み書きして本文を組み立てるだけなので、3秒には余裕をもって収まる。Discord API を別途叩く必要が無いところがこの方式の効きどころで、Bot トークンすら使わずに済む。</p>
+
+  <p><strong>ふたつめは <code>type: 5</code>（DEFERRED）。</strong> <code>/bento</code> で募集を始めるときだけは、D1 への保存に加えてチャンネルへ新しいメッセージを投稿する必要があり、Discord API への往復が挟まる。そこで先に「考え中」の状態だけ返しておき、残りの処理を <code>ctx.waitUntil()</code> に渡している。<code>waitUntil</code> は、レスポンスを返したあとも Worker を終了させずに処理を続けさせるための仕組みである。</p>
+
+  <p class="note"><code>await req.text()</code> より先に <code>req.json()</code> を呼んではいけない。署名の検証対象は生のボディ文字列で、一度パースしてから組み直した文字列では検証が通らなくなる。Interactions Endpoint URL の登録そのものが失敗するので、最初につまずくならたいていここになる。</p>
+</section>
+
+<section>
+  <h2><span class="no">06</span>ログイン機能が無いのに、なぜ成立するのか</h2>
+  <p class="msg">「誰が押したか」を Discord が署名つきで送ってくるので、このアプリは認証を自分で持つ必要がない。</p>
+
+  <p>注文アプリなのに、ユーザーテーブルもパスワードもセッションも持っていない。これで本当に大丈夫なのだろうか？ 成立している理由は2段ある。</p>
+
+  <p><strong>1段目は署名の検証である。</strong> Discord は各リクエストに Ed25519 の署名を付けてくる。Worker は公開鍵でそれを検証し、通らなければ 401 を返してそこで打ち切る。署名が正しいということは、そのリクエストが Discord から来たという証明であり、本文に書かれたユーザー ID も Discord が保証した値として扱える。自分でログインを実装するより、Discord のログイン結果をそのまま信じるほうが安全で短い。</p>
+
+  <p><strong>2段目は、D1 に外向きの入口が無いことである。</strong> 01 の図で見たとおり、D1 に触れるのは binding を持つ Worker だけで、その Worker が公開しているのは、署名検証を通ったリクエストだけが先へ進める POST 1本きりである。つまりデータベースへ到達する経路が、検証を通った Discord からのリクエストという1本に絞られている。</p>
+
+  <p>この性質は、Web ページや管理用の API を1つ足した瞬間に消える。軽く便利な口を開けたくなったときは、それが上の保証を壊さないかを先に考えたほうがよい。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表3: 秘密として扱うものは2つだけ</caption>
+    <thead>
+      <tr><th>名前</th><th>用途</th><th>ローカル</th><th>本番</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>DISCORD_PUBLIC_KEY</code></td><td>署名の検証</td><td><code>.dev.vars</code></td><td><code>wrangler secret put</code></td></tr>
+      <tr><td><code>DISCORD_BOT_TOKEN</code></td><td>メッセージの投稿と締め切り通知</td><td><code>.dev.vars</code></td><td><code>wrangler secret put</code></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="note"><code>.dev.vars</code> は gitignore 済みで、雛形として <code>.dev.vars.example</code> が置いてある。本番の値を <code>wrangler.jsonc</code> の <code>vars</code> に書くと、設定ファイルごとリポジトリに入ってしまう。</p>
+</section>
+
+<section>
+  <h2><span class="no">07</span>リポジトリのどこに何があるか</h2>
+  <p class="msg">読む順番は index.ts → migrations → wrangler.jsonc の3つで、それ以外は補助的なもの。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表4: ファイルと役割の対応</caption>
+    <thead>
+      <tr><th>場所</th><th>役割</th><th>手を入れるとき</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>src/index.ts</code></td><td>Worker の全処理。署名検証、分岐、描画、D1 のクエリまで1ファイル</td><td>機能を足す・直す</td></tr>
+      <tr><td><code>migrations/*.sql</code></td><td>テーブル定義。番号順に1回ずつ適用される</td><td>列やテーブルを増やす</td></tr>
+      <tr><td><code>wrangler.jsonc</code></td><td>Worker 名、エントリ、D1 の binding の設定</td><td>D1 を作り直したとき</td></tr>
+      <tr><td><code>scripts/register-commands.mjs</code></td><td><code>/bento</code> の定義を Discord に登録する</td><td>コマンドの引数を変える</td></tr>
+      <tr><td><code>test/interaction.test.mjs</code></td><td>署名検証から同時押しの競合まで、実際に <code>wrangler dev</code> へ署名つきのリクエストを投げて確かめる51件</td><td>挙動を変えたとき</td></tr>
+      <tr><td><code>worker-configuration.d.ts</code></td><td><code>wrangler types</code> の生成物。<code>env.DB</code> の型がここに出る</td><td><strong>手で編集しない</strong></td></tr>
+      <tr><td><code>docs/bento-design.html</code></td><td>何を作るか・なぜその形にしたかの設計資料</td><td>仕様を決め直すとき</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><code>src/index.ts</code> は650行ほどあるが、上から順に「定数 → 小さなユーティリティ → 描画（<code>render</code> と <code>components</code>）→ 各操作のハンドラ → <code>export default</code>」という並びになっている。全体を掴みたいなら、いちばん下の <code>fetch</code> から読み始めて分岐を追うのが早い。</p>
+</section>
+
+<section>
+  <h2><span class="no">08</span>あえて入れていないもの</h2>
+  <p class="msg">構成の軽さは、足さなかったものの一覧のほうによく表れている。</p>
+
+  <div class="tbl">
+  <table>
+    <caption>表5: 入れなかったものと、その代わり</caption>
+    <thead>
+      <tr><th>入れなかったもの</th><th>代わりにどうしているか</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Web フレームワーク（Express / Hono）</td><td>受けるのは POST 1本だけなので、ルーティングそのものが要らない</td></tr>
+      <tr><td>認証・セッション・ユーザーテーブル</td><td>Discord が署名つきでユーザー ID を送ってくる</td></tr>
+      <tr><td>オブジェクトストレージ（R2 / S3）</td><td>画像もファイルも扱わない</td></tr>
+      <tr><td>KV・Durable Objects・Queues</td><td>状態はすべて D1 の2テーブルに収まっている</td></tr>
+      <tr><td>Cron Trigger（定期実行）</td><td>締め切りは幹事がボタンで行う。自動判定を持たない</td></tr>
+      <tr><td>LLM の API</td><td>叩く箇所が無い。品名の入力は人がそのまま書く</td></tr>
+      <tr><td>Discord の署名検証ライブラリ</td><td>ランタイム内蔵の <code>crypto.subtle</code> で足りる</td></tr>
+      <tr><td>メニュー用のテーブル</td><td>すでに入っている注文をそのまま選択肢として並べる</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p>この一覧は「機能が足りない」という意味ではなく、「無くても成立すると確かめたので置かなかった」という記録になっている。何かを足したくなったときは、まずこの表に同じ発想の行が無いかを見てほしい。</p>
+</section>
+
+<section>
+  <h2><span class="no">09</span>用語の対応</h2>
+
+  <dl class="glossary">
+    <dt>Interaction</dt>
+    <dd>スラッシュコマンド、ボタン、プルダウン、モーダルの送信をまとめた呼び方。Discord はこれらすべてを同じ URL に POST してくるので、<code>interaction.type</code> の数字で見分ける。</dd>
+
+    <dt>binding</dt>
+    <dd>Worker から外部リソースへつなぐ口を、設定ファイルで名前をつけて渡す仕組み。<code>wrangler.jsonc</code> に <code>"binding": "DB"</code> と書くと、コードでは <code>env.DB</code> になる。</dd>
+
+    <dt>custom_id</dt>
+    <dd>ボタンやプルダウンに埋め込んでおく文字列で、押されたときそのまま返ってくる。このアプリでは <code>pick:イベントID</code> のように操作名とイベント ID を <code>:</code> でつないで持たせている。</dd>
+
+    <dt>ephemeral</dt>
+    <dd>押した本人にだけ見える返信。エラーの通知はすべてこれで返すので、やりとりは本人の画面だけで完結する。</dd>
+
+    <dt>deferred（type 5）</dt>
+    <dd>「受け取ったので少し待って」とだけ先に返す応答。3秒を超えそうな処理のときに使い、残りは <code>ctx.waitUntil()</code> で続ける。</dd>
+
+    <dt>マイグレーション</dt>
+    <dd>テーブルの変更を1ファイル1手順で積み上げていく方式。適用済みの記録が DB 側に残るため、同じファイルはかならず1回だけ実行される。</dd>
+  </dl>
+</section>
+
+<section>
+  <h2><span class="no">10</span>次の一歩</h2>
+
+  <div class="tbl">
+  <table>
+    <caption>表6: 目的別の入口</caption>
+    <thead>
+      <tr><th>やりたいこと</th><th>入口</th><th>コマンド</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>手元で動かして触ってみる</td><td><code>README.md</code> のセットアップ</td><td><code>npm install</code> → <code>npm run dev</code></td></tr>
+      <tr><td>表示の文言や集計の見た目を変える</td><td><code>src/index.ts</code> の <code>render()</code></td><td><code>npm run check:fix</code> → <code>npm run deploy</code></td></tr>
+      <tr><td>ボタンを増やす</td><td><code>components()</code> と <code>handleComponent()</code></td><td>同上</td></tr>
+      <tr><td>保存する項目を増やす</td><td><code>migrations/</code> に新しいファイル</td><td><code>npm run db:new -- 名前</code> → <code>db:apply</code> → <code>db:apply:remote</code></td></tr>
+      <tr><td>設計の背景を知る</td><td><code>docs/bento-design.html</code></td><td>ブラウザで開く</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p class="note">デプロイしたのに本番だけ挙動が変わらない、という詰まり方をしたときは、たいてい <code>npm run db:apply:remote</code> か <code>wrangler secret put</code> のどちらかを打ち忘れている。ローカルと本番で別々に管理されるのは、D1 の中身と secret の2つだと覚えておくとよい。</p>
+</section>
+
+</div>

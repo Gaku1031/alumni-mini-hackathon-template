@@ -3,8 +3,9 @@
 Discord のチャンネルに貼った**1枚のメッセージ**が、注文が入るたびに書き換わる。
 注文も集計も集金の管理も、Discord から出ずに終わる。Webサイトは作らない。
 
-設計の全体像は [`docs/bento-design.html`](docs/bento-design.html)（ブラウザで開く）、
-決定の経緯は [`grill-bento-order-20260902.md`](grill-bento-order-20260902.md)。
+技術構成の全体像は [`docs/bento-architecture.html`](docs/bento-architecture.html)（何を使い、どうつながっているか）、
+設計の全体像は [`docs/bento-design.html`](docs/bento-design.html)（何を作るか、なぜその形か）、
+決定の経緯は [`grill-bento-order-20260902.md`](grill-bento-order-20260902.md)。いずれもブラウザで開く。
 
 ## 技術スタック
 
@@ -93,19 +94,25 @@ Worker のコードを変えただけなら `npm run deploy` だけでいい。
 ### 5. Discord で動かす
 
 ```
-/bento title:9/15(月) お弁当 menu:https://... paypay:https://paypay.me/xxxx
+/bento title:9/15(月) お弁当 menu:https://example.com/menu.pdf
 ```
+
+`menu` はメニューのURL。頼む人がこれを開いて品名を決める。任意なので、
+URLが用意できないときは省いてよい（そのときは品名を直接入力してもらう）。
 
 集計メッセージが投稿される。あとはボタンだけで完結する。
 
 1. `[新しく入力]` で品名と金額を入れる → 行が増える
 2. 2人目からは `[頼む ▼]` に既出の品が並ぶ（**注文がそのままメニューになる**）
 3. `[取り消す ▼]` で誰の注文でも消せる
-4. `[締め切る]` → Modal に `配送料 500` のように1行ずつ入れる（空でもいい）
+4. `[締め切る]` → Modal に**割る費用**と**支払先**を入れる（どちらも空でいい）
    → 均等割した実額に書き変わり、`@here` が1回だけ飛ぶ
 5. `[支払った]` で自分が消える。`[未払いに戻す ▼]` で戻せる
+6. 押し間違えたら `[再開]` で開き直せる（注文はそのまま残る）
 
-`paypay` は一度渡せば `guild_settings` に残るので、次回から省略できる。
+**支払先**は自由文字列。PayPayの電話番号でも、送金リンクでも、振込先の口座でも、
+改行して全部並べてもいい。同じサーバーで前回使った値が初期値に入るので、
+幹事が同じなら触らずに閉じるだけでよい。
 
 同じ人が2回頼むと**上書き**になる（1人1個。`unique(event_id, discord_user_id)`）。
 
@@ -114,7 +121,7 @@ Worker のコードを変えただけなら `npm run deploy` だけでいい。
 ```bash
 cp .dev.vars.example .dev.vars   # DISCORD_PUBLIC_KEY / DISCORD_BOT_TOKEN を書く
 npm run dev                      # http://127.0.0.1:8787
-node --test test/interaction.test.mjs   # 署名検証の自己チェック（別ターミナルで dev 起動中に）
+npm test                         # 署名・注文・締め切り・集金・同時押しを通しで検証
 ```
 
 Discord から手元へ届かせたい場合は `cloudflared tunnel --url http://127.0.0.1:8787` などで

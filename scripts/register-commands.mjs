@@ -34,11 +34,10 @@ const commands = [
     description: "お弁当の注文をはじめる",
     options: [
       { type: 3, name: "title", description: "例: 9/15(月) お弁当", required: true },
-      { type: 3, name: "menu", description: "メニューのURL", required: false },
       {
         type: 3,
-        name: "paypay",
-        description: "集金の送金先URL（次回から省略できる）",
+        name: "menu",
+        description: "メニューのURL。頼む人がこれを開いて品名を決める（無くてもいい）",
         required: false,
       },
     ],
