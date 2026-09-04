@@ -33,9 +33,16 @@ Discord のお弁当注文Bot。設計は `docs/bento-design.html` と `grill-be
 
 1. `npm run db:new -- <名前>` でマイグレーションファイルを作る
 2. SQL を書く（既存のマイグレーションファイルを後から書き換えない。必ず新しいファイルを足す）
-3. `npm run db:apply`（ローカル）→ 動いたら `npm run db:apply:remote`（本番）
+3. `npm run db:apply`（ローカル）→ 本番は main に push すれば GitHub Actions が適用する
+   （手で入れるなら `npm run db:apply:remote`）
 
 **ローカルとリモートは別の DB。** 手元で通っても本番にテーブルはできていない。
+
+## デプロイ
+
+- `.github/workflows/deploy.yml` が main への push で `check` → `test` → D1 マイグレーション → `wrangler deploy` を回す
+- PR では check と test だけ走る。デプロイはしない
+- 手で `npm run deploy` を打つ必要は無い
 
 ## 環境変数 / secret
 

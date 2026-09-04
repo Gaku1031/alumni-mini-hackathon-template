@@ -455,16 +455,22 @@ describe("締め切る", () => {
     assert.match(payment.placeholder, /銀行/);
   });
 
-  test("支払先の初期値は同じサーバーで前回使った値", async () => {
+  // 送金先は電話番号や口座なので、同じサーバーの他のイベントへ引き継がない。
+  // 引き継ぐと、用の済んだ番号がサーバー単位でいつまでも残る
+  test("他のイベントの支払先を初期値にしない", async () => {
     const res = await button("today-prefill", "close");
     const payment = res.data.components.flatMap((r) => r.components)[1];
-    assert.equal(payment.value, "PayPay 090-0000-0000");
+    assert.equal(payment.value, undefined);
   });
 
-  test("履歴が無いサーバーでは初期値を入れない", async () => {
-    const res = await button("first-ever", "close");
+  test("再開して締め直すときは、そのイベントの値が初期値に入る", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800);
+    await submit(ev, "doclose", { shared: "", payment: "PayPay 090-1111-2222" });
+    await button(ev, "reopen");
+    const res = await button(ev, "close");
     const payment = res.data.components.flatMap((r) => r.components)[1];
-    assert.equal(payment.value, undefined);
+    assert.equal(payment.value, "PayPay 090-1111-2222");
   });
 
   test("支払先は自由文字列で、複数行のまま表示する", async () => {
@@ -652,6 +658,46 @@ describe("集金する", () => {
 //
 // ここを破ると Discord が 400 を返し、押した人には「この操作に失敗しました」
 // としか出ない。手で試して気づける類のものではないので機械で見張る。
+
+describe("残さないもの", () => {
+  test("全員が支払い終わると支払先が消える", async () => {
+    const ev = nextEvent();
+    await order(ev, "唐揚げ弁当", 800, { user: "p1", name: "いち" });
+    await order(ev, "のり弁", 500, { user: "p2", name: "に" });
+    await submit(ev, "doclose", { shared: "", payment: "PayPay 090-1111-2222" });
+
+    await button(ev, "pay", { user: "p1" });
+    // まだ1人残っているので消えない
+    assert.match((await board(ev, true)).content, /090-1111-2222/);
+
+    await button(ev, "pay", { user: "p2" });
+    assert.doesNotMatch((await board(ev, true)).content, /090-1111-2222/);
+    assert.doesNotMatch((await board(ev, true)).content, /支払先/);
+  });
+
+  test("最後の1人が一斉に押しても壊れない", async () => {
+    const ev = nextEvent();
+    await Promise.all(
+      Array.from({ length: 5 }, (_, i) =>
+        order(ev, "唐揚げ弁当", 800, { user: `q${i}`, name: `q${i}` }),
+      ),
+    );
+    await submit(ev, "doclose", { shared: "", payment: "PayPay 090-3333-4444" });
+    await Promise.all(Array.from({ length: 5 }, (_, i) => button(ev, "pay", { user: `q${i}` })));
+    const { content } = await board(ev, true);
+    assert.doesNotMatch(content, /090-3333-4444/);
+    assert.match(content, /5\/5/);
+  });
+
+  test("本文に @everyone と書かれてもメンションにしない", async () => {
+    const ev = nextEvent();
+    await order(ev, "@everyone 弁当", 800);
+    const res = await select(ev, "cancel", "no-such-order");
+    assert.deepEqual(res.data.allowed_mentions, { parse: [] });
+    // 文字列自体はそのまま出す。消したり伏せ字にしたりはしない
+    assert.match(res.data.content, /@everyone 弁当/);
+  });
+});
 
 describe("Discord の制限に収まっている", () => {
   /** 返ってきた interaction response がそのまま Discord に通る形か */

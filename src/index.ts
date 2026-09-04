@@ -301,6 +301,9 @@ async function board(env: Env, eventId: string) {
   return {
     content: render(ev, results),
     components: components(ev, results),
+    // 品名・表示名・支払先はそのまま本文に載る。@everyone と書かれても
+    // メンションとして解釈させない。表示は文字列のまま変わらない
+    allowed_mentions: { parse: [] },
   };
 }
 
@@ -531,16 +534,13 @@ async function handleComponent(interaction: any, env: Env) {
 
   // 状態と、締め切りモーダルの初期値を1回で引く。
   // last_payment は「このイベントの支払先、無ければ同じサーバーで最後に使った支払先」
+  // 支払先は他のイベントから引き継がない。引き継ぐと、用の済んだ送金先が
+  // サーバー単位でいつまでも残ってしまう
   const ev = await env.DB.prepare(
-    `select e.status, e.menu_url,
-            coalesce(e.payment_info,
-              (select p.payment_info from bento_events p
-                where p.guild_id = e.guild_id and p.payment_info is not null
-                order by p.created_at desc limit 1)) as last_payment
-       from bento_events e where e.id = ?`,
+    "select status, menu_url, payment_info from bento_events where id = ?",
   )
     .bind(eventId)
-    .first<{ status: "open" | "closed"; menu_url: string | null; last_payment: string | null }>();
+    .first<{ status: "open" | "closed"; menu_url: string | null; payment_info: string | null }>();
   if (!ev) return gone();
 
   // 集計メッセージが古いまま押されることがある。締め切り済みに注文を入れさせない、
@@ -559,7 +559,7 @@ async function handleComponent(interaction: any, env: Env) {
       return itemModal(eventId);
 
     case "close":
-      return closeModal(eventId, ev.last_payment);
+      return closeModal(eventId, ev.payment_info);
 
     case "menu":
       return menuModal(eventId, ev.menu_url);
@@ -593,6 +593,17 @@ async function handleComponent(interaction: any, env: Env) {
         .run();
       // 頼んでいない人が押すと0件。何も変わらないと壊れて見えるので本人に返す
       if (r.meta.changes === 0) return reply("あなたの注文が見つかりません。");
+
+      // 全員払い終わったら送金先を消す。電話番号や口座を、用が済んだあとも
+      // 持ち続ける理由が無い。読んでから消すのではなく1文で判定して消すので、
+      // 最後の1人が同時に押しても二重に消えるだけで壊れない
+      await env.DB.prepare(
+        `update bento_events set payment_info = null
+          where id = ? and not exists
+                (select 1 from bento_orders where event_id = ? and paid = 0)`,
+      )
+        .bind(eventId, eventId)
+        .run();
       return updated(env, eventId);
     }
 

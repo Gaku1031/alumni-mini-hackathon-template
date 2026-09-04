@@ -111,7 +111,9 @@ Worker のコードを変えただけなら `npm run deploy` だけでいい。
 3. `[取り消す ▼]` で誰の注文でも消せる。`[メニューを貼る]` でリンクを後から足せる
 4. `[締め切る]` → Modal に**割る費用**と**支払先**を入れる（どちらも空でいい）
    → 均等割した実額に書き変わり、`@here` が1回だけ飛ぶ
-5. `[支払った]` で自分が消える。`[未払いに戻す ▼]` で戻せる
+5. `[支払った]` で自分が消える。`[未払いに戻す ▼]` で戻せる。
+   全員が払い終わると**支払先は自動で消える**（電話番号や口座を残さないため。
+   もう一度出したいときは `[再開]` → `[締め切る]` で入れ直す）
 6. 押し間違えたら `[再開]` で開き直せる（注文はそのまま残る）
 
 **支払先**は自由文字列。PayPayの電話番号でも、送金リンクでも、振込先の口座でも、
@@ -133,6 +135,32 @@ Discord から手元へ届かせたい場合は `cloudflared tunnel --url http:/
 
 ---
 
+## 自動デプロイ（GitHub Actions）
+
+`.github/workflows/deploy.yml` が入っている。
+
+- **Pull Request**: `npm run check` と `npm test` が走る（デプロイはしない）
+- **main に push / マージ**: 上に加えて D1 マイグレーションの本番適用 → `wrangler deploy`
+
+動かすには GitHub リポジトリに secret を2つ登録する。
+
+1. Cloudflare の API トークンを作る
+   [ダッシュボード](https://dash.cloudflare.com/profile/api-tokens) → Create Token →
+   テンプレート **Edit Cloudflare Workers** を使う。D1 も触るので、Permissions に
+   `Account / D1 / Edit` を1行足しておく
+2. GitHub の Settings → Secrets and variables → Actions → New repository secret
+
+   | Name | 値 |
+   | --- | --- |
+   | `CLOUDFLARE_API_TOKEN` | 1 で作ったトークン |
+   | `CLOUDFLARE_ACCOUNT_ID` | `npx wrangler whoami` に出る Account ID |
+
+`DISCORD_PUBLIC_KEY` と `DISCORD_BOT_TOKEN` は Worker 側の secret（`wrangler secret put`）なので、
+GitHub には登録しない。デプロイしても消えない。
+
+スラッシュコマンドの登録（`npm run discord:register`）は Actions には入れていない。
+コマンドの定義を変えたときだけ手で打つ。
+
 ## DB を変更する
 
 ```bash
@@ -143,7 +171,8 @@ npm run db:apply:remote           # 本番に適用
 ```
 
 **ローカル（`--local`）とリモート（`--remote`）は別の DB。**
-手元で通っても本番にテーブルはできていない。デプロイのたびに両方打つ癖をつける。
+手元で通っても本番にテーブルはできていない。
+本番への適用は main に push したときに Actions がやる（手で打つなら `npm run db:apply:remote`）。
 
 中身を覗くとき:
 
