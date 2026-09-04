@@ -13,6 +13,11 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # 既定は6時間。wrangler が入力待ちで止まると気づかないまま枠を食うので短く切る
+    timeout-minutes: 10
+    env:
+      # npm ci の postinstall でも wrangler が走る。ここに置かないと素通りする
+      WRANGLER_SEND_METRICS: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,8 +27,6 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
-        env:
-          WRANGLER_SEND_METRICS: "false"
 
       # ここから先は main への push のときだけ
       - name: D1 マイグレーションを本番に適用
